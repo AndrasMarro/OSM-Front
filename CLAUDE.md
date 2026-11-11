@@ -109,3 +109,29 @@ jederzeit per Konfiguration hinzukommen können.
 
 - Gearbeitet wird auf dem `main`-Branch.
 - `.github/workflows/deploy.yml` baut das Projekt bei jedem Push auf `main` und deployed automatisch auf GitHub Pages.
+
+## Vorgehensweise
+
+Iterativ in 4 Phasen – **nicht** alles auf einmal ohne Test bauen. Jede Phase wird mit `vitest` und per
+Playwright MCP im echten Browser geprüft, bevor die nächste beginnt.
+
+### Phase 1 – Fundament
+
+- [ ] Vite + TypeScript initialisieren, Abhängigkeiten (`maplibre-gl`, `trystero`, `vitest`) installieren,
+      GitHub-Actions-Deployment einrichten.
+- [ ] `MapRegistry` mit Karten-Auswahlmenü für alle Pflicht-Presets sowie der Schnittstelle für Custom Maps.
+- [ ] Kern-Simulation: `Grid`, `Faction`-System (menschliche Spieler, starke `AI_NATION`s, schwache und einzelne
+      starke `AI_TRIBE`s), Bevölkerungswachstum, OpenFront-Zellen-Fluten bei Angriffen.
+- [ ] Karte mit MapLibre + synchronisiertem Territory-Canvas-Overlay rendern: Nationen und Tribes optisch
+      unterscheidbar (Grenzstil/Icons), Namen und Truppenzahlen sichtbar.
+- [ ] Browser-Test via Playwright MCP: Kartenwechsel (z. B. Europa / Balkan / Welt), keine Konsolenfehler,
+      Startgebiet wählbar, schwache Tribes überrennbar, Kampf gegen KI-Nationen möglich.
+
+### Phasen 2–4 – noch nicht festgelegt
+
+Aus den Regeln oben sind nach Phase 1 noch offen und auf die Phasen zu verteilen:
+
+- Gebäude- und Einheiten-Registry (Abschnitt 5)
+- Spezial-Operationen: Marine, Luftwaffe, Raketen (Abschnitt 6)
+- Diplomatie, Handel und KI-Beziehungswerte (Abschnitt 4)
+- P2P-Multiplayer über `trystero` mit Lockstep/Host-Tick (Abschnitte 1 und 2)
