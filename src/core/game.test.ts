@@ -1,21 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { Game, NEUTRAL } from './game';
+import { NEUTRAL } from './game';
 import { mulberry32 } from './rng';
 import { Terrain } from './terrain';
+import { at, human, run, world } from './testkit';
 
 const { WATER, PLAINS, MOUNTAIN, FOREST } = Terrain;
-
-function world(w: number, h: number, terrainAt: (x: number, y: number) => number = () => PLAINS, seed = 1): Game {
-  const terrain = new Uint8Array(w * h);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) terrain[y * w + x] = terrainAt(x, y);
-  return new Game(w, h, terrain, { seed });
-}
-
-const run = (g: Game, ticks: number) => {
-  for (let i = 0; i < ticks; i++) g.step();
-};
-const at = (g: Game, x: number, y: number) => y * g.width + x;
-const human = (g: Game, x: number, y: number) => g.addFaction({ name: 'Mensch', type: 'HUMAN_NATION' }, at(g, x, y))!;
 
 describe('mulberry32', () => {
   it('repeats for the same seed and stays in [0, 1)', () => {
@@ -129,8 +118,12 @@ describe('determinism', () => {
     const b = play(7);
     expect(a.owner).toEqual(b.owner);
     expect(a.factions.map((f) => f.troops)).toEqual(b.factions.map((f) => f.troops));
-    // ...and the AIs actually did something worth comparing.
-    expect(a.factions.filter((f) => f.type === 'AI_NATION').every((f) => f.cells > 200 || !f.alive)).toBe(true);
+    expect(a.factions.map((f) => f.gold)).toEqual(b.factions.map((f) => f.gold));
+    expect(a.buildings.map((x) => [x.def.id, x.owner, x.cell])).toEqual(b.buildings.map((x) => [x.def.id, x.owner, x.cell]));
+    expect(a.units.map((u) => [u.def.id, u.x, u.y])).toEqual(b.units.map((u) => [u.def.id, u.x, u.y]));
+    // ...and the AIs actually did something worth comparing: they grew, built and fought.
+    expect(a.factions.some((f) => f.type === 'AI_NATION' && f.cells > 200)).toBe(true);
+    expect(a.buildings.length).toBeGreaterThan(5);
     expect(a.factions.some((f) => f.id > 0 && !f.alive)).toBe(true);
   });
 

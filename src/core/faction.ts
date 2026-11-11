@@ -13,6 +13,18 @@ export interface Faction {
   cells: number;
   /** Sum of CAPACITY over all owned cells. */
   capacity: number;
+  gold: number;
+  /** Derived once per second from territory, buildings and trade: gold per tick. */
+  income: number;
+  /** Extra troop capacity and growth (percent) from buildings. */
+  cityCapacity: number;
+  growthPct: number;
+  /** Tick until which the traitor malus (weaker defence) lasts. */
+  traitorUntil: number;
+  /** Most recent war opponent (0 = none). The AI aims its special weapons at it. */
+  enemy: number;
+  /** A tribe under the protection of a trading nation defends a little better. */
+  protected: boolean;
   alive: boolean;
   /** AI personality, 0..100: how readily it starts wars. */
   aggression: number;
@@ -45,11 +57,15 @@ interface Rules {
   spawnRadius: number;
   /** AI stops grabbing free land beyond this many cells. */
   maxCells: number;
+  startGold: number;
+  /** Gold per tick: a flat part plus a part per owned cell. */
+  income: number;
+  cellIncome: number;
 }
 
-const NATION: Rules = { growth: 6, startTroops: 2000, baseCapacity: 3000, spawnRadius: 5, maxCells: Infinity };
-const TRIBE: Rules = { growth: 2, startTroops: 300, baseCapacity: 500, spawnRadius: 3, maxCells: 220 };
-const ELITE_TRIBE: Rules = { growth: 4, startTroops: 6000, baseCapacity: 8000, spawnRadius: 4, maxCells: 400 };
+const NATION: Rules = { growth: 6, startTroops: 2000, baseCapacity: 3000, spawnRadius: 5, maxCells: Infinity, startGold: 300, income: 0.5, cellIncome: 0.0015 };
+const TRIBE: Rules = { growth: 2, startTroops: 300, baseCapacity: 500, spawnRadius: 3, maxCells: 220, startGold: 0, income: 0.05, cellIncome: 0.0005 };
+const ELITE_TRIBE: Rules = { growth: 4, startTroops: 6000, baseCapacity: 8000, spawnRadius: 4, maxCells: 400, startGold: 100, income: 0.3, cellIncome: 0.001 };
 
 export function rulesOf(f: { type: FactionType; elite?: boolean }): Rules {
   return f.type !== 'AI_TRIBE' ? NATION : f.elite ? ELITE_TRIBE : TRIBE;

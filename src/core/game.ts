@@ -1,15 +1,34 @@
 import { decide } from './ai';
+import { refreshEconomy, type Building } from './buildings';
+import { Diplomacy, TRAITOR_DEFENSE_PCT } from './diplomacy';
 import { rulesOf, type Faction, type FactionSpec } from './faction';
 import { mulberry32 } from './rng';
 import { CAPACITY, CONQUER_DELAY, DEFENSE_PCT, Terrain } from './terrain';
+import { stepUnits, type Unit } from './units';
 
 export const TICKS_PER_SECOND = 10;
 /** Owner id of unowned cells. Also the "target" of an expansion into free land. */
 export const NEUTRAL = 0;
 
-/** Attack fronts are scheduled into a ring of per-tick buckets; delays must stay below this. */
+/**
+ * Attack fronts are scheduled into a ring of per-tick buckets; delays must stay below this.
+ * Worst case: terrain 12 + jitter 1 + defenders 8 + fort 4 + fallout 6 = 31.
+ */
 const RING = 32;
 const MAX_TERRAIN_DELAY = 12;
+const FALLOUT_DELAY = 6;
+/** A tribe that pays tribute to a nation defends this much better. */
+const PROTECTED_DEFENSE_PCT = 115;
+/** Events older than this many ticks are dropped. */
+const EVENT_TICKS = 40;
+
+/** Something worth showing: explosions, interceptions, landings. No effect on the simulation. */
+export interface GameEvent {
+  type: 'explosion' | 'nuke' | 'intercept' | 'landing' | 'repelled' | 'hit' | 'sunk';
+  cell: number;
+  radius: number;
+  tick: number;
+}
 
 /** A front flooding from `attacker` into the territory of `target`. */
 export interface Attack {
@@ -30,8 +49,8 @@ export interface GameOptions {
 
 /**
  * The deterministic simulation. No DOM, no network, no wall clock: state only
- * changes through `addFaction`, `attack` and `step`, and all randomness comes
- * from the seeded PRNG. Troop counts are fractional, but floating point use
+ * changes through `step` and the commands (`addFaction`, `attack`, `build`,
+ * `launch`, the diplomacy calls), and all randomness comes from the seeded PRNG. Troop counts are fractional, but floating point use
  * is limited to + - * / so results are bit-identical across JS engines.
  */
 export class Game {
@@ -47,12 +66,32 @@ export class Game {
   readonly rng: () => number;
   private readonly delay: number[];
 
+  buildings: Building[] = [];
+  readonly buildingAt = new Map<number, Building>();
+  units: Unit[] = [];
+  readonly diplo = new Diplomacy();
+  /** Per cell: the faction whose fort covers it, the defence bonus in percent and the delay it adds. */
+  readonly fortOwner: Uint16Array;
+  readonly fortPct: Uint16Array;
+  readonly fortSlow: Uint8Array;
+  /** Per cell: tick until which it is irradiated. */
+  readonly fallout: Uint32Array;
+  events: GameEvent[] = [];
+  /** Ids for buildings and units. */
+  nextId = 1;
+  /** Set when buildings changed; the derived economy is refreshed on the next tick. */
+  dirty = false;
+
   constructor(width: number, height: number, terrain: Uint8Array, options: GameOptions) {
     if (terrain.length !== width * height) throw new Error('terrain size does not match grid');
     this.width = width;
     this.height = height;
     this.terrain = terrain;
     this.owner = new Uint16Array(width * height);
+    this.fortOwner = new Uint16Array(width * height);
+    this.fortPct = new Uint16Array(width * height);
+    this.fortSlow = new Uint8Array(width * height);
+    this.fallout = new Uint32Array(width * height);
     this.rng = mulberry32(options.seed);
     this.delay = CONQUER_DELAY.map((d, t) =>
       d === 0 ? 0 : Math.min(MAX_TERRAIN_DELAY, Math.max(1, Math.round(d * (options.terrainWeights?.[t] ?? 1)))),
@@ -69,7 +108,35 @@ export class Game {
   }
 
   maxTroops(f: Faction): number {
-    return rulesOf(f).baseCapacity + f.capacity;
+    return rulesOf(f).baseCapacity + f.capacity + f.cityCapacity;
+  }
+
+  touchesWater(cell: number): boolean {
+    let water = false;
+    this.eachNeighbor(cell, (n) => (water ||= this.terrain[n] === Terrain.WATER));
+    return water;
+  }
+
+  /** The cell nearest to `cell` (itself included, at most `radius` away) that `ok` accepts, or -1. */
+  nearest(cell: number, radius: number, ok: (cell: number) => boolean): number {
+    const { width: w, height: h } = this;
+    const cx = cell % w;
+    const cy = (cell - cx) / w;
+    for (let r = 0; r <= radius; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const x = cx + dx;
+          const y = cy + dy;
+          if (x >= 0 && y >= 0 && x < w && y < h && ok(y * w + x)) return y * w + x;
+        }
+      }
+    }
+    return -1;
+  }
+
+  emit(type: GameEvent['type'], cell: number, radius: number): void {
+    this.events.push({ type, cell, radius, tick: this.tick });
   }
 
   /**
@@ -78,7 +145,7 @@ export class Game {
    */
   addFaction(spec: FactionSpec, cell: number, searchRadius = 12): Faction | null {
     if (this.factions.length > 0xffff) return null;
-    const centre = this.nearestFreeLand(cell, searchRadius);
+    const centre = this.nearest(cell, searchRadius, (c) => this.isFreeLand(c));
     if (centre < 0) return null;
     const { width: w, height: h } = this;
     const r = rulesOf(spec).spawnRadius;
@@ -118,21 +185,80 @@ export class Game {
       if (atk.pending === 0) return false;
       this.attacks.push(atk);
     }
+    this.diplo.hostile(this, attackerId, targetId);
     att.troops -= troops;
     atk.troops += troops;
     return true;
   }
 
+  /**
+   * Puts `troops` of a faction ashore on `cell`, from a ship or from the air.
+   * They take the cell and flood on from it. False if they were too few to take it.
+   */
+  land(attackerId: number, cell: number, troops: number): boolean {
+    const att = this.factions[attackerId];
+    const target = this.owner[cell];
+    if (!att.alive || this.terrain[cell] === Terrain.WATER) return false;
+    if (target === attackerId) {
+      att.troops += troops; // the shore is ours by now: reinforcements
+      return true;
+    }
+    const cost = this.cost(cell, target);
+    if (troops < cost) return false;
+    this.diplo.hostile(this, attackerId, target);
+    this.take(cell, attackerId, target);
+    let atk = this.attacks.find((a) => a.attacker === attackerId && a.target === target);
+    if (!atk) {
+      atk = { attacker: attackerId, target, troops: 0, buckets: Array.from({ length: RING }, () => []), pending: 0 };
+      this.attacks.push(atk);
+    }
+    atk.troops += troops - cost;
+    const front = atk;
+    this.eachNeighbor(cell, (n) => {
+      if (this.isTarget(n, target)) this.enqueue(front, n);
+    });
+    return true;
+  }
+
+  /** Ends the attacks two factions run against each other; the troops go home. */
+  callOff(a: number, b: number): void {
+    this.attacks = this.attacks.filter((atk) => {
+      if (!((atk.attacker === a && atk.target === b) || (atk.attacker === b && atk.target === a))) return true;
+      this.factions[atk.attacker].troops += atk.troops;
+      return false;
+    });
+  }
+
+  removeBuilding(b: Building): void {
+    this.buildingAt.delete(b.cell);
+    this.buildings = this.buildings.filter((o) => o !== b);
+    this.dirty = true;
+  }
+
+  /** A faction without land is out of the game. */
+  buryIfGone(id: number): void {
+    const f = this.factions[id];
+    if (id !== NEUTRAL && f.alive && f.cells === 0) {
+      f.alive = false;
+      f.troops = 0;
+    }
+  }
+
   /** Advances the simulation by one tick (1 / TICKS_PER_SECOND seconds). */
   step(): void {
-    if (this.tick % TICKS_PER_SECOND === 0) this.refreshNeighbors();
+    const second = this.tick % TICKS_PER_SECOND === 0;
+    if (second) this.refreshNeighbors();
+    if (second || this.dirty) refreshEconomy(this);
+    if (this.tick % (10 * TICKS_PER_SECOND) === 0) this.diplo.drift(this);
+    if (this.events.length > 0 && this.events[0].tick + EVENT_TICKS < this.tick) this.events = this.events.filter((e) => e.tick + EVENT_TICKS >= this.tick);
 
     for (let i = 1; i < this.factions.length; i++) {
       const f = this.factions[i];
       if (!f.alive) continue;
+      f.gold += f.income;
       const max = this.maxTroops(f);
       // Logistic growth, fastest at half capacity, plus a base rate so a drained empire recovers.
-      if (f.troops < max) f.troops += ((max / 50 + (f.troops * (max - f.troops)) / max) * rulesOf(f).growth) / 1000;
+      if (f.troops < max) f.troops += ((max / 50 + (f.troops * (max - f.troops)) / max) * rulesOf(f).growth * (100 + f.growthPct)) / 100000;
       // Each AI thinks every two seconds, staggered by id.
       if (f.type !== 'HUMAN_NATION' && (this.tick + f.id * 3) % (2 * TICKS_PER_SECOND) === 0) decide(this, f);
     }
@@ -145,6 +271,7 @@ export class Game {
       }
     }
     if (finished) this.attacks = this.attacks.filter((a) => a.pending >= 0);
+    stepUnits(this);
     this.tick++;
   }
 
@@ -161,6 +288,13 @@ export class Game {
       troops: rulesOf({ type: spec.type, elite }).startTroops,
       cells: 0,
       capacity: 0,
+      gold: rulesOf({ type: spec.type, elite }).startGold,
+      income: 0,
+      cityCapacity: 0,
+      growthPct: 0,
+      traitorUntil: 0,
+      enemy: 0,
+      protected: false,
       alive: true,
       aggression: spec.type === 'AI_NATION' ? 40 + Math.floor(this.rng() * 50) : 5,
       lastAttacker: 0,
@@ -175,25 +309,19 @@ export class Game {
     };
   }
 
-  private nearestFreeLand(cell: number, radius: number): number {
-    const { width: w, height: h } = this;
-    const cx = cell % w;
-    const cy = (cell - cx) / w;
-    for (let r = 0; r <= radius; r++) {
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-          const x = cx + dx;
-          const y = cy + dy;
-          if (x >= 0 && y >= 0 && x < w && y < h && this.isFreeLand(y * w + x)) return y * w + x;
-        }
+  /** Changes the owner of a cell and keeps the per-faction bookkeeping; a building on it changes hands. */
+  setOwner(cell: number, to: number): void {
+    const from = this.owner[cell];
+    const b = this.buildingAt.size > 0 ? this.buildingAt.get(cell) : undefined;
+    if (b) {
+      if (to === NEUTRAL) this.removeBuilding(b);
+      else {
+        b.owner = to;
+        b.interceptors = b.def.intercept ? 1 : 0; // stationed units do not survive the capture
+        if (!b.def.intercept) b.intercept = undefined;
+        this.dirty = true;
       }
     }
-    return -1;
-  }
-
-  private setOwner(cell: number, to: number): void {
-    const from = this.owner[cell];
     const x = cell % this.width;
     const y = (cell - x) / this.width;
     const cap = CAPACITY[this.terrain[cell]];
@@ -223,7 +351,7 @@ export class Game {
   }
 
   /** Calls `fn` for the 4-neighbours of `cell` that are inside the grid. */
-  private eachNeighbor(cell: number, fn: (n: number) => void): void {
+  eachNeighbor(cell: number, fn: (n: number) => void): void {
     const w = this.width;
     const x = cell % w;
     if (x > 0) fn(cell - 1);
@@ -269,21 +397,38 @@ export class Game {
       const att = this.factions[atk.attacker];
       const attDensity = (att.troops + atk.troops) / att.cells;
       d += attDensity > 0 ? Math.min(8, Math.floor((2 * def.troops) / def.cells / attDensity)) : 8;
+      if (this.fortOwner[cell] === atk.target) d += this.fortSlow[cell];
     }
+    if (this.fallout[cell] > this.tick) d += FALLOUT_DELAY;
     atk.buckets[(this.tick + d) % RING].push(cell);
     atk.pending++;
   }
 
   /** Troops the attacker pays for one cell: terrain plus the defenders standing on it. */
-  private cost(cell: number, target: number): number {
+  cost(cell: number, target: number): number {
     const t = this.terrain[cell];
     let cost = this.delay[t] * 2;
+    if (this.fallout[cell] > this.tick) cost *= 3;
     if (target !== NEUTRAL) {
       const def = this.factions[target];
-      const pct = DEFENSE_PCT[t] + (def.elite && t === def.homeTerrain ? 50 : 0);
+      let pct = DEFENSE_PCT[t] + (def.elite && t === def.homeTerrain ? 50 : 0);
+      if (this.fortOwner[cell] === target) pct += this.fortPct[cell];
+      if (def.traitorUntil > this.tick) pct = (pct * TRAITOR_DEFENSE_PCT) / 100;
+      if (def.protected) pct = (pct * PROTECTED_DEFENSE_PCT) / 100;
       cost += Math.ceil(((def.troops / def.cells) * pct) / 100);
     }
     return cost;
+  }
+
+  /** Hands one conquered cell to the attacker: the defenders on it are lost. */
+  private take(cell: number, attacker: number, target: number): void {
+    if (target !== NEUTRAL) {
+      const def = this.factions[target];
+      def.troops -= Math.min(def.troops, Math.floor(def.troops / def.cells));
+      def.lastAttacker = attacker;
+    }
+    this.setOwner(cell, attacker);
+    this.buryIfGone(target);
   }
 
   /** Conquers this tick's cells of one attack. Returns true when the attack is over. */
@@ -305,16 +450,7 @@ export class Game {
           break;
         }
         atk.troops -= cost;
-        if (atk.target !== NEUTRAL) {
-          const def = this.factions[atk.target];
-          def.troops -= Math.min(def.troops, Math.floor(def.troops / def.cells));
-          def.lastAttacker = atk.attacker;
-        }
-        this.setOwner(cell, atk.attacker);
-        if (atk.target !== NEUTRAL && this.factions[atk.target].cells === 0) {
-          this.factions[atk.target].alive = false;
-          this.factions[atk.target].troops = 0;
-        }
+        this.take(cell, atk.attacker, atk.target);
         this.eachNeighbor(cell, (n) => {
           if (this.isTarget(n, atk.target)) this.enqueue(atk, n);
         });
