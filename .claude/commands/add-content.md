@@ -38,7 +38,7 @@ buildingRegistry.register({
 ```
 
 Das Baumenü, die Icons auf der Karte und `build()` übernehmen den Eintrag ohne weitere Änderung.
-Soll die KI den Typ bauen, kommt eine Zeile in die Wunschliste in `src/core/ai.ts`.
+Soll die KI den Typ bauen, kommt eine Zeile in die Wunschliste `NATION_WISHES` in `src/core/ai.ts`.
 
 ## Einheit – `src/core/units.ts`
 
@@ -80,23 +80,27 @@ preset('Iberia', 'Iberische Halbinsel', [-10, 35.5, 4.5, 44], [4, 9], 640,
 
 ## Test-Vorlage
 
+`src/core/testkit.ts` liefert die Helfer: `world(w, h, terrainAt?, seed?)`, `human(g, x, y)` (Spieler mit vollem
+Goldkonto, handelt nie von selbst), `at(g, x, y)` und `run(g, ticks)`.
+
 ```ts
 import { describe, expect, it } from 'vitest';
 import { build } from './buildings';
-import { Game } from './game';
-import { Terrain } from './terrain';
+import { at, human, run, world } from './testkit';
 
 describe('Radar', () => {
   it('does what its definition promises', () => {
-    const g = new Game(40, 40, new Uint8Array(1600).fill(Terrain.PLAINS), { seed: 1 });
-    const me = g.addFaction({ name: 'Test', type: 'HUMAN_NATION' }, 20 * 40 + 20)!;
-    me.gold = 10_000;
-    expect(build(g, me.id, 'Radar', 20 * 40 + 20)).toBe('ok');
-    for (let i = 0; i < 100; i++) g.step();
+    const g = world(40, 40);
+    const me = human(g, 20, 20);
+    expect(build(g, me.id, 'Radar', at(g, 20, 20))).toBe('ok');
+    run(g, 100);
     // assert the effect here, and that a second game with the same seed ends in the same state
   });
 });
 ```
+
+Vorbilder: `buildings.test.ts` (Konfigurations-Typ `Palisade`), `units.test.ts` (Landung, SAM-Abfang),
+`maps/maps.test.ts` (Presets und Custom Maps).
 
 ## Abschluss
 
