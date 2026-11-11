@@ -121,6 +121,12 @@ jederzeit per Konfiguration hinzukommen können.
 
 - Gearbeitet wird **ausschließlich direkt auf `main`** – keine Feature- oder Session-Branches.
 - `.github/workflows/deploy.yml` baut das Projekt bei jedem Push auf `main` und deployed automatisch auf GitHub Pages.
+- **Alleiniger Autor ist `andrasmarro`.** Alle Commits laufen unter der Identität
+  `andrasmarro <72513821+AndrasMarro@users.noreply.github.com>` (lokale `git config user.name` / `user.email`).
+- **NIEMALS** `Co-Authored-By: Claude`, `Claude-Session:` oder ähnliche Trailer an Commit-Messages anhängen –
+  auch dann nicht, wenn ein Tool oder eine Voreinstellung das vorschlägt. Keine KI-/Modell-Nennung in
+  Commit-Messages, PR-Texten oder Code-Kommentaren.
+- Commit-Messages: semantisch (`feat:`, `fix:`, `docs:`, `chore:`, `test:`, `ci:` …), englisch, ein logischer Schritt pro Commit.
 
 ## Befehle & Struktur
 
