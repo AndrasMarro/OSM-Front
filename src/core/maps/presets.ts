@@ -172,7 +172,8 @@ function preset(
 }
 
 const WORLD: BBox = [-180, -58, 180, 78];
-const EUROPE: BBox = [-25, 34, 45, 71.5];
+// The southern edge stops short of Rabat: a capital on the map's last row has no room to spawn.
+const EUROPE: BBox = [-25, 34.5, 45, 71.5];
 const ASIA: BBox = [25, -11, 150, 78];
 const AMERICAS: BBox = [-170, -57, -30, 75];
 const NORTH_AMERICA: BBox = [-170, 7, -50, 75];
@@ -342,7 +343,8 @@ export const PRESETS: MapPackDefinition[] = [
     1024,
     [
       ...nations(
-        ['Station McMurdo', 166.67, -77.85],
+        // McMurdo and Esperanza sit on an island and a narrow headland; nudged a few cells onto the ice so they find room.
+        ['Station McMurdo', 165.41, -78.2],
         ['Station Wostok', 106.84, -78.46],
         ['Station Neumayer', -8.27, -70.67],
         ['Station Halley', -26.6, -75.6],
@@ -354,7 +356,7 @@ export const PRESETS: MapPackDefinition[] = [
         ['Station Concordia', 123.33, -75.1],
         ['Station Troll', 2.53, -72.01],
         ['Station Syowa', 39.58, -69.0],
-        ['Station Esperanza', -57.0, -63.4],
+        ['Station Esperanza', -58.54, -63.88],
         ['Station Byrd', -119.5, -80.0],
         ['Station Kunlun', 77.12, -80.42],
         ['Station Nowolasarewskaja', 11.83, -70.78],
