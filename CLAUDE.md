@@ -107,7 +107,7 @@ jederzeit per Konfiguration hinzukommen können.
 
 ## 7. Git & Deployment
 
-- Gearbeitet wird auf dem `main`-Branch.
+- Gearbeitet wird **ausschließlich direkt auf `main`** – keine Feature- oder Session-Branches.
 - `.github/workflows/deploy.yml` baut das Projekt bei jedem Push auf `main` und deployed automatisch auf GitHub Pages.
 
 ## Vorgehensweise
@@ -119,7 +119,8 @@ Playwright MCP im echten Browser geprüft, bevor die nächste beginnt.
 
 - [ ] Vite + TypeScript initialisieren, Abhängigkeiten (`maplibre-gl`, `trystero`, `vitest`) installieren,
       GitHub-Actions-Deployment einrichten.
-- [ ] `MapRegistry` mit Karten-Auswahlmenü für alle Pflicht-Presets sowie der Schnittstelle für Custom Maps.
+- [ ] `MapRegistry` mit Karten-Auswahlmenü für **alle** Pflicht-Presets aus Abschnitt 3 (inklusive `NorthAmerica`)
+      sowie der Schnittstelle für Custom Maps.
 - [ ] Kern-Simulation: `Grid`, `Faction`-System (menschliche Spieler, starke `AI_NATION`s, schwache und einzelne
       starke `AI_TRIBE`s), Bevölkerungswachstum, OpenFront-Zellen-Fluten bei Angriffen.
 - [ ] Karte mit MapLibre + synchronisiertem Territory-Canvas-Overlay rendern: Nationen und Tribes optisch
@@ -127,11 +128,21 @@ Playwright MCP im echten Browser geprüft, bevor die nächste beginnt.
 - [ ] Browser-Test via Playwright MCP: Kartenwechsel (z. B. Europa / Balkan / Welt), keine Konsolenfehler,
       Startgebiet wählbar, schwache Tribes überrennbar, Kampf gegen KI-Nationen möglich.
 
-### Phasen 2–4 – noch nicht festgelegt
+### Phase 2 – Diplomatie, Gebäude & Einheiten
 
-Aus den Regeln oben sind nach Phase 1 noch offen und auf die Phasen zu verteilen:
+- [ ] Diplomatie- und Handelssystem für KI-Nationen **und** Tribes: `Alliance`, `NonAggressionPact`,
+      `TradeAgreement`/Handelsrouten, `SendAid`, `Embargo`, Traitor-Malus, Beziehungswerte (Abschnitt 4).
+- [ ] Gebäude- und Einheiten-Registry: `City`, `Factory`, `Bunker`, `Port`, `Airfield`, `MissileSilo`, `SAMSite`
+      inklusive Marine- und Luftwaffen-Einheiten sowie der Spezial-Operationen (Abschnitte 5 und 6).
 
-- Gebäude- und Einheiten-Registry (Abschnitt 5)
-- Spezial-Operationen: Marine, Luftwaffe, Raketen (Abschnitt 6)
-- Diplomatie, Handel und KI-Beziehungswerte (Abschnitt 4)
-- P2P-Multiplayer über `trystero` mit Lockstep/Host-Tick (Abschnitte 1 und 2)
+### Phase 3 – Multiplayer & Custom Maps
+
+- [ ] P2P-Multiplayer via `trystero`: Lobby über `#room=...`, Host-Tick/Lockstep-Synchronisation.
+- [ ] Custom-Map-Importer (JSON / OSM-Bounding-Box).
+
+### Phase 4 – Feinschliff
+
+- [ ] UI/UX-Polishing.
+- [ ] Sound-Effekte über die Web Audio API.
+- [ ] Performance-Optimierung.
+- [ ] Finales GitHub-Pages-Deployment.
