@@ -12,7 +12,7 @@ Diese Datei enthält die Architektur-Regeln, die im gesamten Projektverlauf gelt
 | --- | --- |
 | Build & Sprache | Vite + TypeScript (Strict Mode). `base: './'` in `vite.config.ts`, damit GitHub Pages sofort läuft. |
 | Karte | MapLibre GL JS als echter OSM-Kartenhintergrund. |
-| Rendering | Darüberliegendes Canvas-/PixiJS-/WebGL-Overlay, das das Grid mit 60 FPS rendert und synchron mit der MapLibre-Kamera zoomt/verschiebt. |
+| Rendering | Darüberliegendes Canvas-/PixiJS-/WebGL-Overlay, das das Grid mit 60 FPS rendert und synchron mit der MapLibre-Kamera zoomt/verschiebt. Umgesetzt als Canvas mit einem Pixel pro Zelle, das MapLibre als `canvas`-Quelle über die Bounding-Box spannt; Namen und Truppenzahlen liegen auf einem zweiten 2D-Canvas darüber. |
 | Netzwerk | `trystero` über Nostr-/Torrent-Relays, kein eigener Backend-Server. Raum-Beitritt über URL-Hash (`#room=xyz`). |
 | Tests | `vitest` für die deterministische Simulations-Engine. |
 
@@ -33,6 +33,18 @@ Deterministischer Lockstep / Host-Tick.
 | `URBAN` | OSM-Städte/Gebäude; höheres Bevölkerungswachstum, leichter Verteidigungsbonus |
 | `MOUNTAIN` / `FOREST` | Langsame Eroberung, hoher Verteidigungsbonus |
 | `HIGHWAY` / `RAIL` | Schnellerer Nachschub und Einheiten-Speed |
+| `ICE` | Gletscher und Eisschilde: langsame Eroberung, kaum Bevölkerung (für `Antarctica` ergänzt) |
+
+**Terrain-Quellen** (`src/osm/terrain.ts`, außerhalb von `src/core/`, weil es Netzwerk und Canvas braucht):
+
+- OSM-Vektorkacheln von OpenFreeMap (OpenMapTiles-Schema, kein API-Key): Wasser, Eis, Siedlungsflächen, Städte,
+  Wald, Autobahnen, Schienen. Was verfügbar ist, hängt vom Kachel-Zoom der Karte ab: Wasser und Eis immer,
+  Siedlungen und Autobahnen ab Zoom 4, Wald ab 7, Schienen ab 8. Große Karten haben deshalb keinen Wald.
+- Gebirge aus Terrarium-Höhenkacheln (OSM enthält keine Höhendaten), Schwelle pro Karte einstellbar.
+- Straßen und Schienen werden zuletzt gezeichnet und überbrücken damit Flüsse und Meerengen.
+
+**Determinismus-Regeln für `src/core/`:** Gleitkomma nur mit `+ - * /` (keine `Math.sin/log/pow`), damit alle
+JS-Engines bitgleich rechnen. Koordinaten werden außerhalb der Tick-Logik in Zellen umgerechnet.
 
 ## 3. Karten-System (`src/core/maps/`)
 
@@ -110,23 +122,47 @@ jederzeit per Konfiguration hinzukommen können.
 - Gearbeitet wird **ausschließlich direkt auf `main`** – keine Feature- oder Session-Branches.
 - `.github/workflows/deploy.yml` baut das Projekt bei jedem Push auf `main` und deployed automatisch auf GitHub Pages.
 
+## Befehle & Struktur
+
+| Befehl | Zweck |
+| --- | --- |
+| `npm run dev` | Entwicklungsserver |
+| `npm test` | `vitest` für `src/core/` |
+| `npm run build` | Typprüfung + Produktions-Build nach `dist/` |
+
+| Pfad | Inhalt |
+| --- | --- |
+| `src/core/` | Simulation: `game.ts` (Grid, Ticks, Fluten), `ai.ts`, `faction.ts`, `terrain.ts`, `rng.ts`, `setup.ts` |
+| `src/core/maps/` | `MapPackDefinition`, `MapRegistry`, Presets, Projektion, Rasterizer |
+| `src/osm/` | Terrain-Ableitung aus OSM-Kacheln |
+| `src/render/` | Territory-Canvas und Labels |
+| `src/main.ts` | Karte, Menü, HUD, Eingaben, Spielschleife |
+
+Im Browser liegt unter `window.osmFront` ein Handle (`map`, `mapRegistry`, `session()`) für Konsole und Browser-Tests.
+
 ## Vorgehensweise
 
 Iterativ in 4 Phasen – **nicht** alles auf einmal ohne Test bauen. Jede Phase wird mit `vitest` und per
 Playwright MCP im echten Browser geprüft, bevor die nächste beginnt.
 
-### Phase 1 – Fundament
+### Phase 1 – Fundament (abgeschlossen)
 
-- [ ] Vite + TypeScript initialisieren, Abhängigkeiten (`maplibre-gl`, `trystero`, `vitest`) installieren,
+- [x] Vite + TypeScript initialisieren, Abhängigkeiten (`maplibre-gl`, `trystero`, `vitest`) installieren,
       GitHub-Actions-Deployment einrichten.
-- [ ] `MapRegistry` mit Karten-Auswahlmenü für **alle** Pflicht-Presets aus Abschnitt 3 (inklusive `NorthAmerica`)
+- [x] `MapRegistry` mit Karten-Auswahlmenü für **alle** Pflicht-Presets aus Abschnitt 3 (inklusive `NorthAmerica`)
       sowie der Schnittstelle für Custom Maps.
-- [ ] Kern-Simulation: `Grid`, `Faction`-System (menschliche Spieler, starke `AI_NATION`s, schwache und einzelne
+- [x] Kern-Simulation: `Grid`, `Faction`-System (menschliche Spieler, starke `AI_NATION`s, schwache und einzelne
       starke `AI_TRIBE`s), Bevölkerungswachstum, OpenFront-Zellen-Fluten bei Angriffen.
-- [ ] Karte mit MapLibre + synchronisiertem Territory-Canvas-Overlay rendern: Nationen und Tribes optisch
+- [x] Karte mit MapLibre + synchronisiertem Territory-Canvas-Overlay rendern: Nationen und Tribes optisch
       unterscheidbar (Grenzstil/Icons), Namen und Truppenzahlen sichtbar.
-- [ ] Browser-Test via Playwright MCP: Kartenwechsel (z. B. Europa / Balkan / Welt), keine Konsolenfehler,
+- [x] Browser-Test via Playwright MCP: Kartenwechsel (z. B. Europa / Balkan / Welt), keine Konsolenfehler,
       Startgebiet wählbar, schwache Tribes überrennbar, Kampf gegen KI-Nationen möglich.
+
+Bekannte Grenzen nach Phase 1, die spätere Phasen auflösen:
+
+- Wasser ist unüberwindbar, Inseln und andere Kontinente sind also erst mit der Marine (Phase 2) erreichbar.
+- Jeder Client leitet das Terrain beim Laden selbst aus den Kacheln ab. Für Lockstep muss der Host sein Grid
+  (oder einen Hash davon) und den Seed teilen (Phase 3).
 
 ### Phase 2 – Diplomatie, Gebäude & Einheiten
 
