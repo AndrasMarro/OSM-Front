@@ -39,11 +39,11 @@ export function createGame(pack: MapPackDefinition, proj: GridProjection, terrai
 
   // Top the named elite tribes up to the target share with random ones.
   const namedTribes = pack.spawns.filter((s) => s.kind !== 'nation').length;
-  const eliteChance = pack.randomTribes > 0 ? (ELITE_SHARE * (namedTribes + pack.randomTribes) - elites) / pack.randomTribes : 0;
+  const randomElites = Math.round(ELITE_SHARE * (namedTribes + pack.randomTribes)) - elites;
   const rough = (cell: number) => terrain[cell] === Terrain.MOUNTAIN || terrain[cell] === Terrain.FOREST || terrain[cell] === Terrain.ICE;
 
   for (let i = 0; i < pack.randomTribes; i++) {
-    const elite = rng() < eliteChance;
+    const elite = i < randomElites;
     const name = tribeName(rng);
     // Elite tribes look for rough home terrain first; everybody takes what is free after that.
     for (let attempt = 0; attempt < 60; attempt++) {

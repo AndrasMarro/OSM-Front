@@ -90,8 +90,8 @@ describe('createGame', () => {
     expect(nations.length).toBeGreaterThan(20);
     expect(nations.some((f) => f.name === 'Deutschland')).toBe(true);
     expect(tribes.length).toBeGreaterThan(30);
-    expect(eliteShare).toBeGreaterThan(0.1);
-    expect(eliteShare).toBeLessThan(0.27);
+    expect(eliteShare).toBeGreaterThanOrEqual(0.15);
+    expect(eliteShare).toBeLessThanOrEqual(0.2);
   });
 
   it('is reproducible per seed', () => {

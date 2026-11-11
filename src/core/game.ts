@@ -131,8 +131,8 @@ export class Game {
       const f = this.factions[i];
       if (!f.alive) continue;
       const max = this.maxTroops(f);
-      // Logistic growth: fastest at half capacity, with a trickle so nobody is stuck at zero.
-      if (f.troops < max) f.troops += ((50 + (f.troops * (max - f.troops)) / max) * rulesOf(f).growth) / 1000;
+      // Logistic growth, fastest at half capacity, plus a base rate so a drained empire recovers.
+      if (f.troops < max) f.troops += ((max / 50 + (f.troops * (max - f.troops)) / max) * rulesOf(f).growth) / 1000;
       // Each AI thinks every two seconds, staggered by id.
       if (f.type !== 'HUMAN_NATION' && (this.tick + f.id * 3) % (2 * TICKS_PER_SECOND) === 0) decide(this, f);
     }
@@ -257,10 +257,14 @@ export class Game {
     }
   }
 
-  /** Schedules `cell` for conquest. Dense defenders and rough terrain hold the front up longer. */
+  /**
+   * Schedules `cell` for conquest. Rough terrain and dense defenders hold the
+   * front up longer; undefended land falls twice as fast.
+   */
   private enqueue(atk: Attack, cell: number): void {
     let d = this.delay[this.terrain[cell]] + Math.floor(this.rng() * 2);
-    if (atk.target !== NEUTRAL) {
+    if (atk.target === NEUTRAL) d = (d + 1) >> 1;
+    else {
       const def = this.factions[atk.target];
       const att = this.factions[atk.attacker];
       const attDensity = (att.troops + atk.troops) / att.cells;
