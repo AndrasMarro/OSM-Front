@@ -1,0 +1,153 @@
+:root {
+  color-scheme: dark;
+  font: 14px/1.4 system-ui, sans-serif;
+  color: #eef1f5;
+}
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #10141a;
+}
+#map,
+#labels {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+#labels {
+  pointer-events: none;
+}
+.panel {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgb(16 20 26 / 88%);
+  box-shadow: 0 2px 12px rgb(0 0 0 / 40%);
+}
+#hud {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: grid;
+  gap: 8px;
+  width: 250px;
+}
+#hud[hidden],
+#menu[hidden] {
+  display: none;
+}
+#stats {
+  font-variant-numeric: tabular-nums;
+}
+#stats strong {
+  font-size: 1.5em;
+}
+#leaderboard {
+  margin: 0;
+  padding-left: 1.6em;
+  font-variant-numeric: tabular-nums;
+}
+#leaderboard li {
+  display: flex;
+  gap: 6px;
+  justify-content: space-between;
+}
+#leaderboard li.me {
+  font-weight: 700;
+  color: #7db4ff;
+}
+#leaderboard i {
+  flex: none;
+  width: 0.8em;
+  height: 0.8em;
+  margin-top: 0.3em;
+  border-radius: 2px;
+}
+#leaderboard span {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+#controls {
+  display: grid;
+  gap: 6px;
+}
+#controls label {
+  display: flex;
+  justify-content: space-between;
+}
+#hover {
+  min-height: 2.8em;
+  margin: 0;
+  color: #b8c2cf;
+}
+#banner,
+#toast {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(90vw, 560px);
+  text-align: center;
+}
+#banner {
+  bottom: 84px;
+  font-size: 1.15em;
+  font-weight: 600;
+}
+#toast {
+  bottom: 32px;
+}
+#menu {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  overflow: auto;
+  background: rgb(8 10 14 / 70%);
+}
+#menu .panel {
+  max-width: 620px;
+  padding: 24px 28px;
+}
+#menu h1 {
+  margin: 0 0 4px;
+  font-size: 2em;
+  letter-spacing: 0.02em;
+}
+#maps {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+}
+#status {
+  min-height: 1.4em;
+  margin: 12px 0 0;
+  color: #b8c2cf;
+}
+button {
+  padding: 9px 12px;
+  border: 1px solid #3a4658;
+  border-radius: 8px;
+  background: #1d2633;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover:not(:disabled),
+button:focus-visible {
+  border-color: #7db4ff;
+  background: #263447;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+input[type='range'] {
+  width: 100%;
+  accent-color: #4a90ff;
+}
