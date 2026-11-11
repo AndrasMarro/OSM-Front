@@ -30,6 +30,8 @@ const TERRAIN_COUNT = 8;
 const OWNED_SHADE = [1, 1, 1.15, 0.82, 0.66, 1.3, 0.55, 1.4];
 /** Tint of free land. Plains and water stay transparent to show the map underneath. */
 const FREE_TINT = [0, 0, pack(130, 125, 135, 110), pack(46, 120, 60, 95), pack(120, 98, 80, 125), pack(235, 160, 30, 170), pack(70, 70, 80, 170), pack(240, 248, 255, 150)];
+/** Irradiated no-man's-land after a nuclear strike. */
+const FALLOUT_TINT = pack(150, 215, 40, 150);
 
 /**
  * Paints the ownership grid into a canvas with one pixel per cell. MapLibre
@@ -67,13 +69,13 @@ export class TerritoryPainter {
 
   paint(game: Game): void {
     // ponytail: repaints every cell on each change; track dirty rows if grids get much larger.
-    const { owner, terrain, width: w, factions } = game;
+    const { owner, terrain, width: w, factions, fallout, tick } = game;
     if (this.border.length !== factions.length) this.buildPalette(factions);
     const { pixels, fill, border, dotted } = this;
     const n = owner.length;
     for (let i = 0, x = 0, y = 0; i < n; i++) {
       const o = owner[i];
-      if (o === 0) pixels[i] = FREE_TINT[terrain[i]];
+      if (o === 0) pixels[i] = fallout[i] > tick ? FALLOUT_TINT : FREE_TINT[terrain[i]];
       else {
         const edge = (x > 0 && owner[i - 1] !== o) || (x < w - 1 && owner[i + 1] !== o) || (i >= w && owner[i - w] !== o) || (i < n - w && owner[i + w] !== o);
         pixels[i] = edge && !(dotted[o] && (x + y) & 1) ? border[o] : fill[o * TERRAIN_COUNT + terrain[i]];
