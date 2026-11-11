@@ -2,6 +2,7 @@ import { VectorTile } from '@mapbox/vector-tile';
 import { PbfReader } from 'pbf';
 import type { GridProjection } from '../core/maps/projection';
 import { drawLine, fillPolygon } from '../core/maps/rasterize';
+import { synthForest, synthRail } from '../core/maps/synth';
 import type { MapPackDefinition } from '../core/maps/types';
 import { Terrain } from '../core/terrain';
 
@@ -16,6 +17,9 @@ const URBAN_CLASSES = new Set(['residential', 'suburb', 'quarter', 'neighbourhoo
 const POLYGON = 3;
 const LINE = 2;
 const POINT = 1;
+/** Below these tile zooms OpenFreeMap carries no forests / no railways; they are synthesised instead. */
+const FOREST_ZOOM = 7;
+const RAIL_ZOOM = 8;
 
 interface Tile {
   z: number;
@@ -65,12 +69,49 @@ async function elevationPixels(t: Tile): Promise<Uint8ClampedArray> {
 }
 
 /**
+ * Rail hubs, most important first: the capitals the map spawns nations on,
+ * then the tiles' cities by rank. Hubs on water or right next to another are dropped.
+ */
+function railHubs(pack: MapPackDefinition, proj: GridProjection, vector: { t: Tile; layers: VectorTile['layers'] }[], terrain: Uint8Array): number[] {
+  const w = proj.width;
+  const cities: { cell: number; rank: number }[] = [];
+  for (const { t, layers } of vector) {
+    const layer = layers.place;
+    if (!layer) continue;
+    const g = tileToGrid(proj, t, layer.extent);
+    for (let i = 0; i < layer.length; i++) {
+      const feature = layer.feature(i);
+      if (feature.type !== POINT || feature.properties.class !== 'city') continue;
+      const [[p]] = feature.loadGeometry();
+      const x = Math.floor(g.ox + p.x * g.kx);
+      const y = Math.floor(g.oy + p.y * g.ky);
+      if (x >= 0 && y >= 0 && x < w && y < proj.height) cities.push({ cell: y * w + x, rank: Number(feature.properties.rank ?? 99) });
+    }
+  }
+  cities.sort((a, b) => a.rank - b.rank || a.cell - b.cell);
+  const capitals = pack.spawns.filter((s) => s.kind === 'nation').map((s) => proj.cellAt(s.lngLat[0], s.lngLat[1]));
+  const limit = Math.max(24, w >> 4);
+  const hubs: number[] = [];
+  for (const cell of [...capitals, ...cities.map((c) => c.cell)]) {
+    if (hubs.length >= limit) break;
+    if (cell < 0 || terrain[cell] === Terrain.WATER) continue;
+    const x = cell % w;
+    const y = (cell - x) / w;
+    if (hubs.some((o) => Math.abs((o % w) - x) + Math.abs(Math.floor(o / w) - y) < 8)) continue;
+    hubs.push(cell);
+  }
+  return hubs;
+}
+
+/**
  * Builds the terrain grid of a map from real-world data for its bounding box.
  * Later layers overwrite earlier ones: forest, ice, mountains, urban areas,
  * water, and finally roads and rail, which therefore bridge rivers and straits.
  *
  * What the tiles offer depends on the zoom the map resolves to: water and ice
  * always, urban areas and motorways from zoom 4, forests from 7, rail from 8.
+ * Below that, forests come from a biome model and rail from axes between the
+ * map's capitals and biggest cities (see core/maps/synth).
  */
 export async function loadTerrain(
   pack: MapPackDefinition,
@@ -85,7 +126,8 @@ export async function loadTerrain(
   const { width: w, height: h } = proj;
   const terrain = new Uint8Array(w * h).fill(Terrain.PLAINS);
   const auto = matchingZoom(proj);
-  const vectorTiles = tilesCovering(proj, source.zoom ?? auto);
+  const vectorZoom = source.zoom ?? auto;
+  const vectorTiles = tilesCovering(proj, vectorZoom);
   const demTiles = tilesCovering(proj, auto);
 
   let done = 0;
@@ -129,10 +171,8 @@ export async function loadTerrain(
     }
   };
 
-  paint('landcover', POLYGON, (c) => c === 'wood', Terrain.FOREST);
-  paint('landcover', POLYGON, (c) => c === 'ice', Terrain.ICE);
-
   const mountainElevation = source.mountainElevation ?? DEFAULT_MOUNTAIN_ELEVATION;
+  const elevation = new Int16Array(w * h);
   for (const { t, pixels } of dem) {
     const g = tileToGrid(proj, t, DEM_SIZE);
     const x0 = Math.max(0, Math.ceil(g.ox - 0.5));
@@ -143,16 +183,21 @@ export async function loadTerrain(
       const py = Math.min(DEM_SIZE - 1, Math.floor((y + 0.5 - g.oy) / g.ky));
       for (let x = x0; x <= x1; x++) {
         const i = (py * DEM_SIZE + Math.min(DEM_SIZE - 1, Math.floor((x + 0.5 - g.ox) / g.kx))) * 4;
-        const metres = pixels[i] * 256 + pixels[i + 1] + pixels[i + 2] / 256 - 32768;
-        if (metres >= mountainElevation) terrain[y * w + x] = Terrain.MOUNTAIN;
+        elevation[y * w + x] = pixels[i] * 256 + pixels[i + 1] + pixels[i + 2] / 256 - 32768;
       }
     }
   }
+
+  if (vectorZoom >= FOREST_ZOOM) paint('landcover', POLYGON, (c) => c === 'wood', Terrain.FOREST);
+  else synthForest(terrain, w, h, (y) => proj.lngLat(0, y + 0.5)[1], elevation, mountainElevation);
+  paint('landcover', POLYGON, (c) => c === 'ice', Terrain.ICE);
+  for (let i = 0; i < elevation.length; i++) if (elevation[i] >= mountainElevation) terrain[i] = Terrain.MOUNTAIN;
 
   paint('landuse', POLYGON, (c) => URBAN_CLASSES.has(c as string), Terrain.URBAN);
   paint('place', POINT, (c) => c === 'city', Terrain.URBAN);
   paint('water', POLYGON, () => true, Terrain.WATER);
   paint('transportation', LINE, (c) => c === 'motorway', Terrain.HIGHWAY);
-  paint('transportation', LINE, (c) => c === 'rail', Terrain.RAIL);
+  if (vectorZoom >= RAIL_ZOOM) paint('transportation', LINE, (c) => c === 'rail', Terrain.RAIL);
+  else synthRail(terrain, w, h, railHubs(pack, proj, vector, terrain));
   return terrain;
 }
