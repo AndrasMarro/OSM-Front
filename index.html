@@ -12,11 +12,13 @@
 
     <div id="hud" hidden>
       <section id="stats" class="panel" aria-label="Dein Reich"></section>
+      <section id="offers" class="panel" aria-label="Diplomatische Angebote" hidden></section>
       <section class="panel" aria-label="Rangliste nach Gebiet (Zellen)"><ol id="leaderboard"></ol></section>
       <section id="controls" class="panel">
         <label for="strength">Angriffsstärke <output id="strength-value" for="strength">50 %</output></label>
         <input id="strength" type="range" min="5" max="100" step="5" value="50" />
         <p id="hover">&nbsp;</p>
+        <button id="export-map" type="button">Karte exportieren</button>
         <button id="to-menu" type="button">Karte wechseln</button>
       </section>
     </div>
@@ -37,8 +39,52 @@
         <p>Echtzeit-Strategie auf echten OpenStreetMap-Daten. Wähle eine Karte:</p>
         <div id="maps"></div>
         <p id="status" role="status" aria-live="polite"></p>
+
+        <section id="lobby" aria-label="Mehrspieler">
+          <h2>Mehrspieler</h2>
+          <div id="lobby-off">
+            <p>Spiele mit anderen direkt von Browser zu Browser, ohne Server.</p>
+            <button id="room-create" type="button">Raum erstellen</button>
+          </div>
+          <div id="lobby-on" hidden>
+            <label>Dein Name <input id="player-name" maxlength="20" autocomplete="nickname" /></label>
+            <label>Einladungslink <input id="room-link" readonly /></label>
+            <button id="room-copy" type="button">Link kopieren</button>
+            <ul id="players"></ul>
+            <p id="lobby-status" role="status" aria-live="polite"></p>
+            <button id="room-leave" type="button">Raum verlassen</button>
+          </div>
+        </section>
+
+        <details id="custom">
+          <summary>Eigene Karte</summary>
+          <form id="custom-form">
+            <label>Name <input name="name" required maxlength="40" value="Meine Karte" /></label>
+            <fieldset>
+              <legend>Ausschnitt in Grad</legend>
+              <label>West <input name="west" type="number" step="any" min="-180" max="180" required /></label>
+              <label>Süd <input name="south" type="number" step="any" min="-85" max="85" required /></label>
+              <label>Ost <input name="east" type="number" step="any" min="-180" max="180" required /></label>
+              <label>Nord <input name="north" type="number" step="any" min="-85" max="85" required /></label>
+            </fieldset>
+            <button id="custom-pick" type="button">Ausschnitt auf der Karte wählen</button>
+            <label>Auflösung (Zellen in der Breite)
+              <select name="width">
+                <option>512</option>
+                <option selected>768</option>
+                <option>1024</option>
+              </select>
+            </label>
+            <label>Zufällige Stämme <input name="tribes" type="number" min="0" max="200" step="1" value="30" required /></label>
+            <button type="submit">Karte anlegen</button>
+          </form>
+          <label>Karte aus JSON-Datei importieren <input id="custom-import" type="file" accept="application/json,.json" /></label>
+          <button id="custom-clear" type="button">Eigene Karten löschen</button>
+        </details>
       </div>
     </main>
+
+    <button id="custom-pick-done" class="panel" type="button" hidden>Diesen Ausschnitt übernehmen</button>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -31,14 +31,14 @@ const EFFECT_COLOR: Record<GameEvent['type'], string> = {
  * interceptions, and the selected cell. Call after `drawLabels`, which
  * clears the canvas and sets its scale.
  */
-export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, game: Game, proj: GridProjection, selected: number, now: number): void {
+export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, game: Game, proj: GridProjection, selected: number, now: number, me = -1): void {
   const w = game.width;
   const { clientWidth, clientHeight } = ctx.canvas;
   const at = (x: number, y: number) => map.project(proj.lngLat(x + 0.5, y + 0.5));
   const ofCell = (cell: number) => at(cell % w, Math.floor(cell / w));
   const visible = (p: { x: number; y: number }, margin = 40) => p.x > -margin && p.y > -margin && p.x < clientWidth + margin && p.y < clientHeight + margin;
   const cellPx = (at(w, 0).x - at(0, 0).x) / w;
-  const rgb = (id: number) => factionColor(game.factions[id]).join(' ');
+  const rgb = (id: number) => factionColor(game.factions[id], me).join(' ');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 

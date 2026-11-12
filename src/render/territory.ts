@@ -12,10 +12,14 @@ function hsl(h: number, s: number, l: number): RGB {
   return [channel(0), channel(8), channel(4)];
 }
 
-/** Nations get saturated colours, tribes muted ones (elite tribes dark), so the two read apart at a glance. */
-export function factionColor(f: Faction): RGB {
-  if (f.type === 'HUMAN_NATION') return [36, 120, 255];
+/**
+ * Nations get saturated colours, tribes muted ones (elite tribes dark), so the two read apart at a glance.
+ * The local player (`me`) is always the same blue; other players are bright.
+ */
+export function factionColor(f: Faction, me = -1): RGB {
+  if (f.id === me) return [36, 120, 255];
   const hue = (f.id * 137.508) % 360; // golden angle: neighbouring ids land far apart
+  if (f.type === 'HUMAN_NATION') return hsl(hue, 0.95, 0.6);
   if (f.type === 'AI_NATION') return hsl(hue, 0.72, 0.5);
   return f.elite ? hsl(hue, 0.5, 0.3) : hsl(hue, 0.28, 0.64);
 }
@@ -45,6 +49,7 @@ export class TerritoryPainter {
   private fill = new Uint32Array(0);
   private border = new Uint32Array(0);
   private dotted = new Uint8Array(0);
+  private me = -1;
 
   constructor(width: number, height: number) {
     this.canvas.width = width;
@@ -54,12 +59,13 @@ export class TerritoryPainter {
     this.pixels = new Uint32Array(this.image.data.buffer);
   }
 
-  private buildPalette(factions: Faction[]): void {
+  private buildPalette(factions: Faction[], me: number): void {
+    this.me = me;
     this.fill = new Uint32Array(factions.length * TERRAIN_COUNT);
     this.border = new Uint32Array(factions.length);
     this.dotted = new Uint8Array(factions.length);
     for (const f of factions) {
-      const rgb = factionColor(f);
+      const rgb = factionColor(f, me);
       for (let t = 0; t < TERRAIN_COUNT; t++) this.fill[f.id * TERRAIN_COUNT + t] = shade(rgb, OWNED_SHADE[t], 205);
       // Nations: solid dark border (the player's is white). Tribes: dotted border.
       this.border[f.id] = f.type === 'HUMAN_NATION' ? pack(255, 255, 255, 255) : shade(rgb, 0.4, 255);
@@ -67,10 +73,10 @@ export class TerritoryPainter {
     }
   }
 
-  paint(game: Game): void {
+  paint(game: Game, me = -1): void {
     // ponytail: repaints every cell on each change; track dirty rows if grids get much larger.
     const { owner, terrain, width: w, factions, fallout, tick } = game;
-    if (this.border.length !== factions.length) this.buildPalette(factions);
+    if (this.border.length !== factions.length || this.me !== me) this.buildPalette(factions, me);
     const { pixels, fill, border, dotted } = this;
     const n = owner.length;
     for (let i = 0, x = 0, y = 0; i < n; i++) {

@@ -158,6 +158,8 @@ body {
 }
 #banner,
 #toast {
+  /* Messages must never swallow a click meant for the map underneath. */
+  pointer-events: none;
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
@@ -194,6 +196,75 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 8px;
+}
+#menu h2,
+#menu summary {
+  margin: 18px 0 6px;
+  font-size: 1.1em;
+  font-weight: 600;
+}
+#menu summary {
+  cursor: pointer;
+}
+#menu label {
+  display: grid;
+  gap: 3px;
+  margin: 8px 0;
+  color: #b8c2cf;
+}
+#menu input:not([type='file']),
+#menu select {
+  padding: 7px 9px;
+  border: 1px solid #3a4658;
+  border-radius: 8px;
+  background: #151c26;
+  color: #eef1f5;
+  font: inherit;
+}
+#menu fieldset {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 8px 0;
+  padding: 4px 10px 6px;
+  border: 1px solid #3a4658;
+  border-radius: 8px;
+}
+#menu fieldset input {
+  width: 100%;
+  box-sizing: border-box;
+}
+#players {
+  margin: 8px 0;
+  padding-left: 1.3em;
+}
+#lobby-status {
+  color: #b8c2cf;
+}
+#custom-pick-done {
+  position: absolute;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-color: #7db4ff;
+  font-weight: 600;
+}
+#offers {
+  display: grid;
+  gap: 6px;
+}
+#offers[hidden] {
+  display: none;
+}
+#offers div {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+#offers button {
+  flex: none;
+  padding: 4px 9px;
 }
 #status {
   min-height: 1.4em;
