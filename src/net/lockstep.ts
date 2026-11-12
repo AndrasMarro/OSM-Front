@@ -72,17 +72,21 @@ export class Lockstep {
   /** Orders something for the local player. It takes effect in one of the next turns. */
   issue(cmd: PlayerCommand): void {
     if (this.host) this.queue.push([this.selfId, cmd]);
-    else this.net!.send('cmd', cmd, this.hostId);
+    else void this.net!.send('cmd', cmd, this.hostId);
   }
 
-  /** Host: closes a turn - all commands received so far, then `steps` ticks - and sends it to everyone. */
-  turn(steps: number): void {
-    if (!this.host || (steps === 0 && this.queue.length === 0)) return;
+  /**
+   * Host: closes a turn - all commands received so far, then `steps` ticks - and sends it to everyone.
+   * Returns false if there was nothing to do.
+   */
+  turn(steps: number): boolean {
+    if (!this.host || (steps === 0 && this.queue.length === 0)) return false;
     const turn: Turn = { n: this.next, steps, cmds: this.queue };
     if (steps > 0 && this.game.tick % HASH_EVERY === 0) turn.hash = this.game.hash();
     this.queue = [];
-    this.net?.send('turn', turn);
+    void this.net?.send('turn', turn);
     this.apply(turn);
+    return true;
   }
 
   /** Client: plays every turn that has arrived. Returns whether the game moved. */
