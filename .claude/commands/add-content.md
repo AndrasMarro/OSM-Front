@@ -76,7 +76,10 @@ preset('Iberia', 'Iberische Halbinsel', [-10, 35.5, 4.5, 44], [4, 9], 640,
 
 - Bounding-Box `[minLng, minLat, maxLng, maxLat]`, Zoom-Grenzen `[min, max]`, Grid-Breite in Zellen.
 - Spawn-Punkte müssen auf Land liegen; im Browser prüfen, dass jede Nation wirklich spawnt.
-- Custom Maps brauchen keinen Code: `mapRegistry.register(json)` mit einem `MapPackDefinition`-Objekt.
+- Custom Maps brauchen keinen Code: im Menü unter „Eigene Karte“ einen Ausschnitt anlegen oder eine JSON-Datei
+  importieren (`packFromBBox()` bzw. `mapRegistry.register(json)` mit einem `MapPackDefinition`-Objekt).
+- Was Spieler tun können, läuft über `Command`s (`src/core/commands.ts`). Eine neue Spieleraktion ist ein neuer
+  Kommando-Typ mit Prüfung in `execute()`, nie ein direkter Aufruf aus der Oberfläche – sonst bricht Lockstep.
 
 ## Test-Vorlage
 

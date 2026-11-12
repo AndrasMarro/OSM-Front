@@ -171,6 +171,35 @@ ihren Kriegsgegner ein.
   Commit-Messages, PR-Texten oder Code-Kommentaren.
 - Commit-Messages: semantisch (`feat:`, `fix:`, `docs:`, `chore:`, `test:`, `ci:` …), englisch, ein logischer Schritt pro Commit.
 
+## 8. Multiplayer & Custom Maps
+
+**Host-Tick-Lockstep (`src/net/`):** Alle Peers rechnen dasselbe deterministische Spiel.
+
+- Spieler ändern das Spiel ausschließlich über `Command`s (`src/core/commands.ts`): schlichtes JSON, das
+  `execute()` prüft und ausführt. Ungültiges wird abgelehnt, nie geworfen – Kommandos kommen von fremden Rechnern.
+- Clients senden Kommandos an den Host. Nur der Host ordnet sie in nummerierte **Turns** (Kommandos + Anzahl
+  Ticks) und verteilt diese; alle führen sie in derselben Reihenfolge aus (`Lockstep`). Ein Spiel ohne Netz ist
+  derselbe Ablauf mit einem Host ohne Peers.
+- Der Host verschickt sein Terrain-Grid, die Karte und den Seed; kein Client leitet eigenes Terrain ab.
+- Alle 50 Ticks trägt ein Turn den Zustands-Hash des Hosts (`Game.hash()`). Weicht ein Client ab oder fehlt ein
+  Turn, hält er an und meldet den Synchronisationsverlust.
+- Die Welt steht, bis alle im Raum ihr Startgebiet gewählt haben (höchstens 30 s).
+- Die Spieluhr läuft in einem Worker, damit ein Host im Hintergrund-Tab das Spiel nicht einfriert.
+- `Transport` ist eine Schnittstelle: `trystero` (WebRTC, Vermittlung über öffentliche Nostr-Relays) oder mit
+  `?net=local` ein `BroadcastChannel` zwischen Tabs desselben Browsers – für Entwicklung und Browser-Tests.
+
+**Lobby:** „Raum erstellen“ setzt `#room=<id>`; wer den Link öffnet, tritt bei. Host ist, wer den Raum eröffnet
+hat (in `sessionStorage` gemerkt, überlebt einen Reload); nur er wählt die Karte. Verträge zwischen Spielern
+laufen über Angebote, die der Empfänger im HUD annimmt – so erreichen auch KI-Angebote den Spieler.
+
+**Custom Maps (`src/ui/custom-maps.ts`, `src/core/maps/custom.ts`):**
+
+- *Bounding-Box:* Ausschnitt eintippen oder auf der Karte wählen; `packFromBBox()` erzeugt daraus ein
+  `MapPackDefinition` mit OSM-Terrain, den Hauptstädten des Katalogs im Ausschnitt und zufälligen Tribes.
+- *Export/Import:* „Karte exportieren“ schreibt das Pack als JSON, das Terrain steckt als PNG-Maske
+  (`terrain: { type: 'mask' }`, Rotkanal = Terrain-ID) darin. Der Import prüft die Datei mit `validateMapPack()`.
+- Eigene Karten liegen im `localStorage` des Browsers.
+
 ## Befehle & Struktur
 
 | Befehl | Zweck |
@@ -181,14 +210,17 @@ ihren Kriegsgegner ein.
 
 | Pfad | Inhalt |
 | --- | --- |
-| `src/core/` | Simulation: `game.ts` (Grid, Ticks, Fluten, Landungen), `diplomacy.ts`, `buildings.ts`, `units.ts`, `registry.ts`, `ai.ts`, `faction.ts`, `terrain.ts`, `rng.ts`, `setup.ts`, `testkit.ts` (Test-Helfer) |
-| `src/core/maps/` | `MapPackDefinition`, `MapRegistry`, Presets, Projektion, Rasterizer, `synth.ts` (Wald/Schiene) |
-| `src/osm/` | Terrain-Ableitung aus OSM-Kacheln |
+| `src/core/` | Simulation: `game.ts` (Grid, Ticks, Fluten, Landungen, Hash), `commands.ts`, `diplomacy.ts`, `buildings.ts`, `units.ts`, `registry.ts`, `ai.ts`, `faction.ts`, `terrain.ts`, `rng.ts`, `setup.ts`, `testkit.ts` (Test-Helfer) |
+| `src/core/maps/` | `MapPackDefinition`, `MapRegistry`, Presets, Projektion, Rasterizer, `synth.ts` (Wald/Schiene), `custom.ts` (Karte aus Bounding-Box) |
+| `src/net/` | `lockstep.ts` (Host-Tick), `transport.ts` (trystero / BroadcastChannel), `lobby.ts` (Raum, Host, Namen) |
+| `src/osm/` | Terrain-Ableitung aus OSM-Kacheln und aus PNG-Masken |
 | `src/render/` | Territory-Canvas, Labels, `overlay.ts` (Gebäude-Icons, Einheiten, Flugbahnen, Effekte) |
-| `src/main.ts` | Karte, Menü, HUD, Aktions-Panel, Eingaben, Spielschleife |
+| `src/ui/` | `custom-maps.ts` (Bounding-Box-Formular, JSON-Import/-Export) |
+| `src/main.ts` | Karte, Menü, Lobby, HUD, Aktions-Panel, Angebote, Eingaben, Spielschleife |
 | `.claude/commands/` | Projekt-Skills: `/verify` (Tests, Build, Browser, Doku, Commit) und `/add-content` (neue Gebäude/Einheiten/Karten) |
 
-Im Browser liegt unter `window.osmFront` ein Handle (`map`, `mapRegistry`, `session()`) für Konsole und Browser-Tests.
+Im Browser liegt unter `window.osmFront` ein Handle (`map`, `mapRegistry`, `session()`, `lobby()`) für Konsole und
+Browser-Tests. `session()` liefert u. a. `game`, `proj`, `pack`, `lockstep` und `me` (die eigene Fraktion).
 
 ## Vorgehensweise
 
@@ -211,8 +243,8 @@ Playwright MCP im echten Browser geprüft, bevor die nächste beginnt.
 Bekannte Grenzen nach Phase 1, die spätere Phasen auflösen:
 
 - Wasser ist unüberwindbar, Inseln und andere Kontinente sind also erst mit der Marine (Phase 2) erreichbar.
-- Jeder Client leitet das Terrain beim Laden selbst aus den Kacheln ab. Für Lockstep muss der Host sein Grid
-  (oder einen Hash davon) und den Seed teilen (Phase 3).
+- Jeder Client leitet das Terrain beim Laden selbst aus den Kacheln ab (gelöst in Phase 3: der Host teilt Grid
+  und Seed).
 
 ### Phase 2 – Diplomatie, Gebäude & Einheiten (abgeschlossen)
 
@@ -230,17 +262,30 @@ Bekannte Grenzen nach Phase 1, die spätere Phasen auflösen:
 
 Bekannte Grenzen nach Phase 2:
 
-- Die KI macht Angebote nur an andere KIs; Spieler bieten selbst an (ein Posteingang für KI-Angebote fehlt).
 - Sicht-Teilung im Bündnis ist gegenstandslos, solange es keinen Nebel des Krieges gibt.
 - Bomber sind Einweg-Einsätze (Kosten pro Flug), Schiffe fahren 4-verbunden (eckige Routen), kein Umlauf bei ±180°.
 - Die KI baut Häfen an jedem Wasser, also auch an Binnenseen ohne Seeweg.
 - Das Biom-Modell kennt keinen Niederschlag: Steppen und trockene Binnenländer sind zu grün.
 - Balancing ist grob: große KI-Nationen wachsen sehr schnell (Feinschliff in Phase 4).
 
-### Phase 3 – Multiplayer & Custom Maps
+### Phase 3 – Multiplayer & Custom Maps (abgeschlossen)
 
-- [ ] P2P-Multiplayer via `trystero`: Lobby über `#room=...`, Host-Tick/Lockstep-Synchronisation.
-- [ ] Custom-Map-Importer (JSON / OSM-Bounding-Box).
+- [x] P2P-Multiplayer via `trystero`: Lobby über `#room=...`, Host-Tick/Lockstep-Synchronisation.
+- [x] Custom-Map-Importer (JSON / OSM-Bounding-Box), dazu Export mit Terrain-Maske.
+- [x] Angebots-Posteingang: Verträge mit Spielern (von Spielern wie von der KI) werden angenommen statt
+      automatisch entschieden.
+- [x] Geprüft mit 64 Vitest-Tests und im Browser: zwei Tabs über `?net=local` und über echtes WebRTC
+      (Nostr-Relays) – gleiche Zustands-Hashes auf beiden Seiten, Bündnis per Angebot, Spielende durch den Host;
+      eigene Karte aus einem Ausschnitt angelegt, exportiert und mit identischem Terrain wieder importiert.
+
+Bekannte Grenzen nach Phase 3:
+
+- Kein Beitritt und kein Wiedereinstieg in ein laufendes Spiel. Wer geht, hinterlässt eine untätige Fraktion;
+  verlässt der Host den Raum, endet das Spiel (keine Host-Migration).
+- Ein Desync wird erkannt, aber nicht repariert (kein Zustands-Snapshot).
+- Clients spielen Turns ab, sobald sie eintreffen (kein Jitter-Puffer); ein Befehl wirkt nach einem Umlauf zum Host.
+- Keine TURN-Server: hinter strengen Firmen-/Mobilfunk-NATs kommt womöglich keine Verbindung zustande.
+- Eigene Karten bekommen ihre Nationen nur aus dem Katalog; andere Spawns verlangen Handarbeit am JSON.
 
 ### Phase 4 – Feinschliff
 

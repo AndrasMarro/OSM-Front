@@ -24,7 +24,10 @@ und alle folgenden wiederholen.
    - **Funktion:** Das Feature tut, was es soll (Zustand vorher/nachher vergleichen).
    - **Rendering:** Screenshot ansehen – Territorien, Icons, Flugbahnen und HUD sind sichtbar und lesbar.
    - **Konsole:** 0 Fehler (`browser_console_messages` mit Level `error`).
-5. Dev-Server wieder beenden. Screenshots nicht committen (`.playwright-mcp/` ist ignoriert).
+5. Mehrspieler: zwei Tabs im selben Browser-Kontext mit `?net=local` (BroadcastChannel statt Relays). Im ersten
+   Tab „Raum erstellen“, den Einladungslink im zweiten öffnen, als Host eine Karte starten. Beide Seiten müssen
+   beim selben Tick denselben `session().game.hash()` liefern und `session().lockstep.desynced` muss `false` sein.
+6. Dev-Server wieder beenden. Screenshots nicht committen (`.playwright-mcp/` ist ignoriert).
 
 Skripte für `browser_run_code_unsafe` kurz halten (Timeout 60 s); längere Abläufe in mehrere Aufrufe teilen.
 
