@@ -135,8 +135,7 @@ function negotiate(g: Game, f: Faction): void {
   }
   if (f.neighbors.length === 0 || g.rng() >= 0.15) return;
   const n = g.factions[f.neighbors[Math.floor(g.rng() * f.neighbors.length)]];
-  // ponytail: AIs make offers to each other only. Players make their own; an inbox for AI offers is UI work.
-  if (!n.alive || n.type === 'HUMAN_NATION') return;
+  if (!n.alive) return;
   const status = d.status(g, f.id, n.id);
   if (status === 'War' || (status === 'Neutral' && n.troops > f.troops * 1.3)) {
     // Sue the stronger side for peace, or keep a strong neighbour quiet.

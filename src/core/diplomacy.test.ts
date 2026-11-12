@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { PACT_TICKS, TRADE_INCOME, TRAITOR_TICKS } from './diplomacy';
+import { OFFER_TICKS, PACT_TICKS, TRADE_INCOME, TRAITOR_TICKS, type Treaty } from './diplomacy';
 import { rulesOf } from './faction';
 import { at, human, run, world } from './testkit';
+
+/** Offer and acceptance in one go, for treaties between players. */
+const agree = (g: ReturnType<typeof world>, from: number, to: number, treaty: Treaty) => {
+  g.diplo.propose(g, from, to, treaty);
+  return g.diplo.accept(g, to, from, treaty);
+};
 
 /** Three players in a row: A borders B, C stands apart. Players never act on their own. */
 function trio() {
@@ -51,8 +57,7 @@ describe('relations and treaties', () => {
 
   it('lets a non-aggression pact run out', () => {
     const { g, a, b, d } = trio();
-    d.adjust(a.id, b.id, 50);
-    expect(d.propose(g, a.id, b.id, 'NonAggressionPact')).toBe(true);
+    expect(agree(g, a.id, b.id, 'NonAggressionPact')).toBe(true);
     g.tick += PACT_TICKS - 1;
     expect(d.status(g, a.id, b.id)).toBe('NonAggressionPact');
     g.tick++;
@@ -62,7 +67,7 @@ describe('relations and treaties', () => {
   it('punishes attacking an ally with the traitor malus', () => {
     const { g, a, b, c, d } = trio();
     d.adjust(a.id, b.id, 100);
-    expect(d.propose(g, a.id, b.id, 'Alliance')).toBe(true);
+    expect(agree(g, a.id, b.id, 'Alliance')).toBe(true);
     expect(g.attack(a.id, b.id, 20)).toBe(true);
 
     expect(d.status(g, a.id, b.id)).toBe('War');
@@ -82,8 +87,7 @@ describe('relations and treaties', () => {
 
   it('draws the allies of the victim into the war', () => {
     const { g, a, b, c, d } = trio();
-    d.adjust(b.id, c.id, 100);
-    d.propose(g, b.id, c.id, 'Alliance');
+    agree(g, b.id, c.id, 'Alliance');
     g.attack(a.id, b.id, 20);
     expect(d.status(g, c.id, a.id)).toBe('War');
     expect(d.relation(c.id, a.id)).toBe(-20);
@@ -95,11 +99,45 @@ describe('relations and treaties', () => {
     g.attack(a.id, b.id, 50);
     const sent = g.attacks[0].troops;
     const home = a.troops;
-    d.adjust(a.id, b.id, 100);
-    expect(d.propose(g, a.id, b.id, 'NonAggressionPact')).toBe(true);
+    expect(agree(g, a.id, b.id, 'NonAggressionPact')).toBe(true);
     expect(g.attacks.length).toBe(0);
     expect(a.troops).toBe(home + sent);
     expect(d.status(g, a.id, b.id)).toBe('NonAggressionPact');
+  });
+});
+
+describe('offers to players', () => {
+  it('wait for the player instead of being answered by the AI formula', () => {
+    const { g, a, b, c, d } = trio();
+    expect(d.propose(g, a.id, b.id, 'Alliance')).toBe(false);
+    expect(d.status(g, a.id, b.id)).toBe('Neutral');
+    expect(d.offersTo(g, b.id)).toEqual([{ from: a.id, to: b.id, treaty: 'Alliance', until: OFFER_TICKS }]);
+    expect(d.accept(g, c.id, a.id, 'Alliance')).toBe(false); // not addressed to C
+    expect(d.accept(g, b.id, a.id, 'NonAggressionPact')).toBe(false); // not what was offered
+    expect(d.accept(g, b.id, a.id, 'Alliance')).toBe(true);
+    expect(d.status(g, a.id, b.id)).toBe('Alliance');
+    expect(d.accept(g, b.id, a.id, 'Alliance')).toBe(false); // used up
+    expect(d.offersTo(g, b.id)).toEqual([]);
+  });
+
+  it('lapse after a while', () => {
+    const { g, a, b, d } = trio();
+    d.propose(g, a.id, b.id, 'TradeAgreement');
+    d.propose(g, a.id, b.id, 'TradeAgreement'); // asking twice is still one offer
+    expect(d.offersTo(g, b.id).length).toBe(1);
+    g.tick += OFFER_TICKS;
+    expect(d.offersTo(g, b.id)).toEqual([]);
+    expect(d.accept(g, b.id, a.id, 'TradeAgreement')).toBe(false);
+    expect(d.trading(a.id, b.id)).toBe(false);
+  });
+
+  it('reach players from AI nations too', () => {
+    const g = world(80, 30);
+    const me = human(g, 10, 15);
+    const nation = g.addFaction({ name: 'Nation', type: 'AI_NATION' }, at(g, 40, 15))!;
+    expect(g.diplo.propose(g, nation.id, me.id, 'NonAggressionPact')).toBe(false);
+    expect(g.diplo.accept(g, me.id, nation.id, 'NonAggressionPact')).toBe(true);
+    expect(g.diplo.status(g, me.id, nation.id)).toBe('NonAggressionPact');
   });
 });
 
@@ -125,14 +163,13 @@ describe('trade and aid', () => {
 
   it('cuts trade with an embargo and refuses new agreements while it stands', () => {
     const { g, a, b, d } = trio();
-    expect(d.propose(g, a.id, b.id, 'TradeAgreement')).toBe(true);
+    expect(agree(g, a.id, b.id, 'TradeAgreement')).toBe(true);
     d.setEmbargo(a.id, b.id, true);
     expect(d.trading(a.id, b.id)).toBe(false);
     expect(d.relation(a.id, b.id)).toBe(-20);
-    d.adjust(a.id, b.id, 100);
-    expect(d.propose(g, a.id, b.id, 'TradeAgreement')).toBe(false);
+    expect(agree(g, a.id, b.id, 'TradeAgreement')).toBe(false);
     d.setEmbargo(a.id, b.id, false);
-    expect(d.propose(g, a.id, b.id, 'TradeAgreement')).toBe(true);
+    expect(agree(g, a.id, b.id, 'TradeAgreement')).toBe(true);
   });
 
   it('hands over troops as aid and never more than the giver has', () => {

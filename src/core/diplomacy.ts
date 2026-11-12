@@ -10,8 +10,19 @@ export const WAR_TICKS = 600;
 /** Breaking an alliance weakens the traitor's defence to this percentage for a minute. */
 export const TRAITOR_TICKS = 600;
 export const TRAITOR_DEFENSE_PCT = 70;
+/** An offer to a player waits this long for an answer. */
+export const OFFER_TICKS = 300;
 /** Gold per tick each side earns from a trade agreement; a tribe pays a nation 1.5 times that as tribute. */
 export const TRADE_INCOME = 0.2;
+
+/** A treaty offered to a player, who has to accept it; AIs answer at once. */
+export interface Offer {
+  from: number;
+  to: number;
+  treaty: Treaty;
+  /** Tick at which the offer lapses. */
+  until: number;
+}
 
 const key = (a: number, b: number) => (a < b ? a * 65536 + b : b * 65536 + a);
 const clamp = (v: number) => Math.max(-100, Math.min(100, v));
@@ -28,6 +39,7 @@ export class Diplomacy {
   private readonly alliances = new Set<number>();
   private readonly trades = new Set<number>();
   private readonly embargoes = new Set<number>();
+  private offers: Offer[] = [];
 
   /** -100 (hatred) to +100 (devotion); strangers start at 0. */
   relation(a: number, b: number): number {
@@ -112,24 +124,53 @@ export class Diplomacy {
   }
 
   /**
-   * `from` offers `to` a treaty. Returns whether it was accepted and is now in force.
-   * A pact or alliance ends a war between the two and calls their attacks off.
+   * `from` offers `to` a treaty. Returns whether it is in force now: an AI
+   * answers on the spot, a player gets the offer and has to `accept` it.
    */
   propose(g: Game, from: number, to: number, treaty: Treaty): boolean {
-    const k = key(from, to);
     if (from === to || !g.factions[from]?.alive || !g.factions[to]?.alive) return false;
-    if (treaty === 'TradeAgreement' && this.embargoes.has(k)) return false;
+    if (treaty === 'TradeAgreement' && this.embargoes.has(key(from, to))) return false;
+    if (g.factions[to].type === 'HUMAN_NATION') {
+      this.offers = this.offers.filter((o) => !(o.from === from && o.to === to && o.treaty === treaty));
+      this.offers.push({ from, to, treaty, until: g.tick + OFFER_TICKS });
+      return false;
+    }
     if (this.acceptance(g, from, to, treaty) < 0) return false;
+    this.seal(g, from, to, treaty);
+    return true;
+  }
+
+  /** Offers waiting for `to`'s answer. */
+  offersTo(g: Game, to: number): Offer[] {
+    return this.offers.filter((o) => o.to === to && o.until > g.tick && g.factions[o.from].alive);
+  }
+
+  /** Is an offer of `from` waiting for `to`'s answer? */
+  offered(g: Game, from: number, to: number, treaty: Treaty): boolean {
+    return this.offers.some((o) => o.from === from && o.to === to && o.treaty === treaty && o.until > g.tick);
+  }
+
+  /** The player `to` takes up an offer made by `from`. False if there is none (any more). */
+  accept(g: Game, to: number, from: number, treaty: Treaty): boolean {
+    const open = this.offered(g, from, to, treaty) && g.factions[from]?.alive && g.factions[to]?.alive;
+    this.offers = this.offers.filter((o) => !(o.from === from && o.to === to && o.treaty === treaty));
+    if (!open || (treaty === 'TradeAgreement' && this.embargoes.has(key(from, to)))) return false;
+    this.seal(g, from, to, treaty);
+    return true;
+  }
+
+  /** Puts a treaty in force. A pact or alliance ends a war between the two and calls their attacks off. */
+  private seal(g: Game, from: number, to: number, treaty: Treaty): void {
+    const k = key(from, to);
     if (treaty === 'TradeAgreement') {
       this.trades.add(k);
-      return true;
+      return;
     }
     if (treaty === 'Alliance') this.alliances.add(k);
     else this.pacts.set(k, g.tick + PACT_TICKS);
     this.wars.delete(k);
     g.callOff(from, to);
     this.adjust(from, to, 10);
-    return true;
   }
 
   /** Gift of gold or troops. Buys goodwill: up to +15 per gift. */
@@ -194,6 +235,7 @@ export class Diplomacy {
 
   /** Slow relation changes, run every ten seconds: loyalty, trade, shared enemies, lasting wars. */
   drift(g: Game): void {
+    this.offers = this.offers.filter((o) => o.until > g.tick);
     for (const atk of g.attacks) if (atk.target) this.wars.set(key(atk.attacker, atk.target), g.tick + WAR_TICKS);
     const dead = (k: number) => !g.factions[Math.floor(k / 65536)].alive || !g.factions[k % 65536].alive;
     const bump = (k: number, delta: number) => this.relations.set(k, clamp((this.relations.get(k) ?? 0) + delta));

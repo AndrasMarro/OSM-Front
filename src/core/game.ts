@@ -235,6 +235,17 @@ export class Game {
     this.dirty = true;
   }
 
+  /**
+   * Fingerprint of the state that matters: who owns what, and every faction's
+   * troops and gold. Lockstep peers compare it to notice a desync.
+   */
+  hash(): number {
+    let h = 2166136261 ^ this.tick;
+    for (let i = 0; i < this.owner.length; i++) h = Math.imul(h ^ this.owner[i], 16777619);
+    for (const f of this.factions) h = Math.imul(Math.imul(h ^ Math.floor(f.troops), 16777619) ^ Math.floor(f.gold), 16777619);
+    return h >>> 0;
+  }
+
   /** A faction without land is out of the game. */
   buryIfGone(id: number): void {
     const f = this.factions[id];

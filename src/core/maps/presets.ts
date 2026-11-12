@@ -155,6 +155,9 @@ function catalogue(bbox: BBox, maxTier: number): SpawnPoint[] {
   return [...NATIONS.filter(inside).map(spawn('nation')), ...ELITE_TRIBES.filter(inside).map(spawn('eliteTribe'))];
 }
 
+/** Every catalogued nation and great tribe inside a box - the spawn points of a custom map. */
+export const spawnsIn = (bbox: BBox): SpawnPoint[] => catalogue(bbox, 3);
+
 const nations = (...list: [string, number, number][]): SpawnPoint[] => list.map(spawn('nation'));
 const elites = (...list: [string, number, number][]): SpawnPoint[] => list.map(spawn('eliteTribe'));
 

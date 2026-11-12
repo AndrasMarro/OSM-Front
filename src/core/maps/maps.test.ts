@@ -3,6 +3,7 @@ import { createGame } from '../setup';
 import { Terrain } from '../terrain';
 import { GridProjection } from './projection';
 import { drawLine, fillPolygon } from './rasterize';
+import { packFromBBox } from './custom';
 import { mapRegistry, MapRegistry, validateMapPack } from './registry';
 
 const REQUIRED = ['World', 'Europe', 'Asia', 'Americas', 'NorthAmerica', 'SouthAmerica', 'Balkans', 'USA', 'China', 'Russia', 'Australia', 'Antarctica'];
@@ -102,3 +103,39 @@ describe('createGame', () => {
     expect(createGame(pack, proj, terrain, 6).owner).not.toEqual(a.owner);
   });
 });
+
+describe('custom maps', () => {
+  it('builds a playable pack for any bounding box, with the capitals inside it', () => {
+    const iberia = packFromBBox('Iberische Halbinsel', [-10, 35.5, 4.5, 44], 640, 25);
+    expect(validateMapPack(iberia)).toEqual([]);
+    expect(iberia.id).toBe(packFromBBox('Iberische Halbinsel', [-10, 35.5, 4.5, 44]).id);
+    expect(iberia.spawns.map((s) => s.name)).toEqual(expect.arrayContaining(['Spanien', 'Portugal']));
+    expect(iberia.spawns.some((s) => s.name === 'Deutschland')).toBe(false);
+    expect(iberia.zoom.min).toBeGreaterThanOrEqual(3);
+    expect(iberia.zoom.max).toBeGreaterThan(iberia.zoom.min);
+    expect(packFromBBox('Welt', [-180, -60, 180, 80]).zoom.min).toBeLessThanOrEqual(1);
+    // It survives the trip through JSON, which is how maps are exported, imported and sent to other players.
+    const registry = new MapRegistry();
+    registry.register(JSON.parse(JSON.stringify(iberia)));
+    expect(registry.get(iberia.id)).toEqual(iberia);
+  });
+
+  it('rejects packs that are not what they claim to be', () => {
+    const good = packFromBBox('Test', [5, 45, 11, 48]);
+    const bad = (patch: object) => validateMapPack({ ...good, ...patch } as never).length;
+    expect(validateMapPack(null as never).length).toBe(1);
+    expect(validateMapPack('pack' as never).length).toBe(1);
+    expect(bad({ name: 'x'.repeat(200) })).toBe(1);
+    expect(bad({ id: 5 })).toBe(1);
+    expect(bad({ bbox: ['a', 1, 2, 3] })).toBe(1);
+    expect(bad({ zoom: { min: -3, max: 99 } })).toBe(1);
+    expect(bad({ spawns: [{ name: 'Nirgendwo' }] })).toBe(1);
+    expect(bad({ spawns: [{ name: 'X', lngLat: [1, 2], kind: 'emperor' }] })).toBe(1);
+    expect(bad({ randomTribes: 1e9 })).toBe(1);
+    expect(bad({ terrainWeights: { PLAINS: -1 } })).toBe(1);
+    expect(bad({ terrain: { type: 'mask', url: 'javascript:alert(1)' } })).toBe(1);
+    expect(bad({ terrain: { type: 'mask', url: 'data:image/png;base64,AAAA' } })).toBe(0);
+    expect(bad({ terrain: { type: 'mask', url: './maps/alps.png' } })).toBe(0);
+  });
+});
+
