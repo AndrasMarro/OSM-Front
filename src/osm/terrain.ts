@@ -68,6 +68,18 @@ async function elevationPixels(t: Tile): Promise<Uint8ClampedArray> {
   return ctx.getImageData(0, 0, DEM_SIZE, DEM_SIZE).data;
 }
 
+/** Terrain from a picture: one pixel per cell (scaled to the grid if it is not), red channel = terrain id. */
+async function maskTerrain(url: string, w: number, h: number): Promise<Uint8Array> {
+  const bitmap = await createImageBitmap(await (await get(url)).blob(), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+  const ctx = new OffscreenCanvas(w, h).getContext('2d', { willReadFrequently: true })!;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  const pixels = ctx.getImageData(0, 0, w, h).data;
+  const terrain = new Uint8Array(w * h);
+  for (let i = 0; i < terrain.length; i++) terrain[i] = Math.min(Terrain.ICE, pixels[i * 4]);
+  return terrain;
+}
+
 /**
  * Rail hubs, most important first: the capitals the map spawns nations on,
  * then the tiles' cities by rank. Hubs on water or right next to another are dropped.
@@ -119,9 +131,8 @@ export async function loadTerrain(
   onProgress: (done: number, total: number) => void = () => {},
 ): Promise<Uint8Array> {
   const source = pack.terrain;
-  if (source.type !== 'osm') throw new Error('PNG-Terrain-Masken folgen mit dem Custom-Map-Importer (Phase 3).');
-  // ponytail: every client derives the terrain itself, on every load. For lockstep the host
-  // should ship its grid (or a hash of it); baking presets into PNG masks would also cut the download.
+  if (source.type === 'mask') return maskTerrain(source.url, proj.width, proj.height);
+  // ponytail: presets are derived from the tiles on every load; baking them into PNG masks would cut the download.
 
   const { width: w, height: h } = proj;
   const terrain = new Uint8Array(w * h).fill(Terrain.PLAINS);
