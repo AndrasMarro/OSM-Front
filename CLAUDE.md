@@ -224,7 +224,7 @@ Browser-Tests. `session()` liefert u. a. `game`, `proj`, `pack`, `lockstep` und 
 
 ## Vorgehensweise
 
-Iterativ in 4 Phasen – **nicht** alles auf einmal ohne Test bauen. Jede Phase wird mit `vitest` und per
+Iterativ in 5 Phasen – **nicht** alles auf einmal ohne Test bauen. Jede Phase wird mit `vitest` und per
 Playwright MCP im echten Browser geprüft, bevor die nächste beginnt.
 
 ### Phase 1 – Fundament (abgeschlossen)
@@ -266,7 +266,7 @@ Bekannte Grenzen nach Phase 2:
 - Bomber sind Einweg-Einsätze (Kosten pro Flug), Schiffe fahren 4-verbunden (eckige Routen), kein Umlauf bei ±180°.
 - Die KI baut Häfen an jedem Wasser, also auch an Binnenseen ohne Seeweg.
 - Das Biom-Modell kennt keinen Niederschlag: Steppen und trockene Binnenländer sind zu grün.
-- Balancing ist grob: große KI-Nationen wachsen sehr schnell (Feinschliff in Phase 4).
+- Balancing ist grob: große KI-Nationen wachsen sehr schnell (Feinschliff in Phase 5).
 
 ### Phase 3 – Multiplayer & Custom Maps (abgeschlossen)
 
@@ -287,7 +287,26 @@ Bekannte Grenzen nach Phase 3:
 - Keine TURN-Server: hinter strengen Firmen-/Mobilfunk-NATs kommt womöglich keine Verbindung zustande.
 - Eigene Karten bekommen ihre Nationen nur aus dem Katalog; andere Spawns verlangen Handarbeit am JSON.
 
-### Phase 4 – Feinschliff
+### Phase 4 – QoL, In-World-Steuerung, Bau-Ghost, Kampf-Alarme & Nationen-Editor
+
+- [ ] **Nationen-Editor** (Startmenü & Lobby): Nations- und Herrschername, Primär-/Sekundärfarbe, Flaggen-Baukasten
+      (Vorlagen Triband horizontal/vertikal, Kreuz, Diagonal, Kreis + Farben + Emblem), Doktrin mit leichtem,
+      deterministischem Bonus (*Industriemacht* +15 % Fabrik-Einkommen, *Seemacht* Häfen & Schiffe 20 % günstiger,
+      *Festungsdoktrin* Bunker +20 % Verteidigung, *Expansionsdrang* +10 % Bevölkerungswachstum). Speicherung im
+      `localStorage`, Synchronisation an alle Peers; Flagge auf der Karte, in der Rangliste und im Diplomatie-Menü.
+- [ ] **Kontext-Radialmenü am Klickpunkt** statt Seitenfenster: Bau-Rad + Truppen-Sammelpunkt auf eigenem Gebiet;
+      Bodenangriff (mit Truppen-Regler am Menü), Landung, Luftschlag/Rakete und Diplomatie auf fremdem Gebiet;
+      Kriegsschiff-Patrouille und See-Invasion auf Wasser. Schließt bei Klick daneben oder `ESC`.
+- [ ] **Hotkeys & Bau-Ghost:** `1`–`7` = `City`, `Factory`, `Bunker`, `Port`, `Airfield`, `MissileSilo`, `SAMSite`;
+      Hotkey-Leiste unten mit Kosten; `ESC`/Rechtsklick bricht ab. Halbtransparente Vorschau unter dem Mauszeiger
+      mit Wirkungs-/Schutz-/Verbindungsradius, grün/rot je nach Baubarkeit, mit Texthinweis am Cursor.
+- [ ] **Angriffswarnungen & Gefechts-Indikatoren:** pulsierendes Leuchten an umkämpften Grenzen mit Kampfsymbol
+      und Truppenzahlen; klickbare Warn-Banner mit Richtungsanzeige (Bodenoffensive, Landung, Luftangriff,
+      Rakete), Klick zentriert die Kamera; blinkende Gefahrenzone am Ziel anfliegender Raketen.
+- [ ] **Dynamischer Custom Cursor:** taktischer Zeiger, Angriffs-, Landungs-, Bau- und Zielerfassungs-Cursor.
+- [ ] Vitest-Tests für Doktrinen und die Synchronisation der Nationsdaten; Browser-Prüfung aller fünf Punkte.
+
+### Phase 5 – Audio & Feinschliff
 
 - [ ] UI/UX-Polishing.
 - [ ] Sound-Effekte über die Web Audio API.
