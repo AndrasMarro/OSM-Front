@@ -1,6 +1,6 @@
 ---
 description: Neues Gebäude, neue Einheit oder neue Karte modular über die Registries hinzufügen (inkl. Vitest-Test)
-argument-hint: "<building|unit|map> <Name> [Beschreibung der gewünschten Wirkung]"
+argument-hint: "<building|unit|doctrine|map> <Name> [Beschreibung der gewünschten Wirkung]"
 ---
 
 Füge neuen Inhalt hinzu: **$ARGUMENTS**
@@ -46,6 +46,7 @@ Soll die KI den Typ bauen, kommt eine Zeile in die Wunschliste `NATION_WISHES` i
 unitRegistry.register({
   id: 'CruiseMissile',
   name: 'Marschflugkörper',
+  icon: '➤',              // ein Zeichen für Radialmenü, Hotkey-Leiste und Vorschau
   cost: 500,
   base: 'MissileSilo',    // Gebäude-ID, von der aus die Einheit startet
   domain: 'missile',      // 'sea' | 'air' | 'missile' – bestimmt Bewegung und wer sie abfangen kann
@@ -63,6 +64,15 @@ unitRegistry.register({
 
 Das Aktionsmenü listet die Einheit automatisch: Einheiten mit `intercept` oder `trade` beim Klick auf
 eigenes Gebiet, alle anderen bei der Zielauswahl.
+
+## Doktrin – `src/core/nation.ts`
+
+```ts
+doctrineRegistry.register({ id: 'trade', name: 'Handelsmacht', text: '+10 % Fabrik-Einkommen, Schiffe 10 % günstiger', factoryIncomePct: 10, navalDiscountPct: 10 });
+```
+
+Der Nationen-Editor bietet sie sofort an. Vorhandene Felder: `factoryIncomePct`, `navalDiscountPct`,
+`fortDefensePct`, `growthPct`; ein neues Feld braucht eine Zeile in `bonusOf()` und genau eine Stelle der Engine.
 
 ## Karte – `src/core/maps/presets.ts`
 

@@ -77,6 +77,19 @@ Jede Entität auf der Karte implementiert das Interface `Faction`.
 | `AI_NATION` | Computergesteuerte Staaten, oft nach echten Ländern/Regionen der Karte benannt. Expandieren strategisch, bauen Wirtschaft, Luftwaffe, Marine und Raketensilos, führen aktiv Kriege. |
 | `AI_TRIBE` | Lokale Platzhalter/Pufferstaaten zum Füllen der Karte, in zwei Unterkategorien (siehe unten). |
 
+**Eigene Nation (`src/core/nation.ts`, `src/ui/nation-editor.ts`):** Spieler gestalten vor dem Start ein
+`NationProfile` – Nations- und Herrschername, Gebiets- und Grenzfarbe, Flagge (Vorlage, drei Farben, Emblem) und
+Doktrin. Es liegt im `localStorage`, geht per `hello` an die Lobby und mit dem `spawn`-Kommando ins Spiel;
+`sanitizeNation()` bereinigt es auf jedem Peer gleich. Doktrinen sind Daten in `doctrineRegistry`, die Engine
+liest nur ihre Zahlen:
+
+| Doktrin | Bonus |
+| --- | --- |
+| Industriemacht | +15 % Fabrik-Einkommen |
+| Seemacht | Küstengebäude (Hafen) und Schiffe 20 % günstiger |
+| Festungsdoktrin | Verteidigungsbonus eigener Bunker ×1,2 |
+| Expansionsdrang | +10 % Bevölkerungswachstum |
+
 **Tribes:**
 
 - *Standard-Tribes (ca. 80–85 %):* deutlich schwächeres Bevölkerungswachstum, geringe Aggressivität, fast keine
@@ -156,9 +169,24 @@ ihren Kriegsgegner ein.
   Bunkern die Eroberung der Grenzzellen (Flood-Fill/BFS-Queue entlang der Grenze).
 - **Spezial-Operationen** als zielbare Karten-Aktionen: Marine-Invasionen (über Wasserzellen),
   Luftschläge/Fallschirmjäger (über `Airfield`), Raketenschläge (über `MissileSilo`).
-- **Bedienung:** Klick auf freies Nachbarland greift sofort an. Jeder Klick öffnet das Aktions-Panel: auf eigenem
-  Gebiet das Baumenü, auf fremdem Gebiet/Wasser die Zielauswahl (Bodenangriff, Schiffe, Luftwaffe, Raketen) und
-  bei fremden Fraktionen die Diplomatie. Der Stärke-Regler gilt für Angriffe, Truppentransporte und Truppenhilfe.
+- **Truppen-Sammelpunkt:** ein Punkt auf eigenem Gebiet (Kommando `rally`); im Umkreis von 8 Zellen kostet
+  eigenes Land den Angreifer 50 % mehr, solange der Punkt selbst gehalten wird.
+
+**Bedienung (`src/main.ts`, `src/ui/`):**
+
+- **Linksklick** öffnet am Klickpunkt das Radialmenü (`radial.ts`): auf eigenem Gebiet Bau-Rad, Sammelpunkt und
+  stationierte Einheiten; auf fremdem Gebiet Bodenangriff, Schiffe, Luftwaffe, Raketen und das Diplomatie-Untermenü;
+  auf Wasser Kriegsschiff und See-Invasion. Die Nabe nennt, worauf der Zeiger steht (Kosten, Hinderungsgrund).
+  Klick daneben oder `ESC` schließt es. Klick auf freies Land stößt zusätzlich sofort vor.
+- **Hotkeys:** `1`–`7` wählen ein Gebäude (Reihenfolge der `buildingRegistry`), `8`/`9` Bomber und Rakete. Im
+  Bau- bzw. Zielmodus führt der nächste Klick den Befehl direkt aus; `ESC` oder Rechtsklick verlässt den Modus.
+- **Bau-Ghost:** folgt dem Mauszeiger, zeigt Icon, Radien (Verteidigung, Abfangen, Reichweite der dort
+  stationierten Einheiten, Wirkungsradius) und bei Fabriken die Linie zur angeschlossenen Stadt; grün, wenn
+  `canBuild()` zustimmt, sonst rot mit Grund am Cursor.
+- **Alarme:** oben mittig je Bedrohung ein Knopf (Bodenoffensive, Landung, Luftangriff, Rakete) mit Richtungspfeil;
+  ein Klick zentriert die Karte auf die Front bzw. das Ziel.
+- **Cursor (`cursors.ts`):** `default`, `attack` (angrenzender Gegner), `landing` (fremde Küste bei eigenem Hafen),
+  `build`, `target`. Der aktuelle Zustand steht auch in `canvas.dataset.cursor`.
 
 ## 7. Git & Deployment
 
@@ -191,6 +219,7 @@ ihren Kriegsgegner ein.
 **Lobby:** „Raum erstellen“ setzt `#room=<id>`; wer den Link öffnet, tritt bei. Host ist, wer den Raum eröffnet
 hat (in `sessionStorage` gemerkt, überlebt einen Reload); nur er wählt die Karte. Verträge zwischen Spielern
 laufen über Angebote, die der Empfänger im HUD annimmt – so erreichen auch KI-Angebote den Spieler.
+Die Lobby zeigt jeden Spieler mit Flagge, Herrscher- und Nationsnamen.
 
 **Custom Maps (`src/ui/custom-maps.ts`, `src/core/maps/custom.ts`):**
 
@@ -210,17 +239,18 @@ laufen über Angebote, die der Empfänger im HUD annimmt – so erreichen auch K
 
 | Pfad | Inhalt |
 | --- | --- |
-| `src/core/` | Simulation: `game.ts` (Grid, Ticks, Fluten, Landungen, Hash), `commands.ts`, `diplomacy.ts`, `buildings.ts`, `units.ts`, `registry.ts`, `ai.ts`, `faction.ts`, `terrain.ts`, `rng.ts`, `setup.ts`, `testkit.ts` (Test-Helfer) |
+| `src/core/` | Simulation: `game.ts` (Grid, Ticks, Fluten, Landungen, Hash), `commands.ts`, `diplomacy.ts`, `buildings.ts`, `units.ts`, `nation.ts` (Profil, Doktrinen), `registry.ts`, `ai.ts`, `faction.ts`, `terrain.ts`, `rng.ts`, `setup.ts`, `testkit.ts` (Test-Helfer) |
 | `src/core/maps/` | `MapPackDefinition`, `MapRegistry`, Presets, Projektion, Rasterizer, `synth.ts` (Wald/Schiene), `custom.ts` (Karte aus Bounding-Box) |
 | `src/net/` | `lockstep.ts` (Host-Tick), `transport.ts` (trystero / BroadcastChannel), `lobby.ts` (Raum, Host, Namen) |
 | `src/osm/` | Terrain-Ableitung aus OSM-Kacheln und aus PNG-Masken |
-| `src/render/` | Territory-Canvas, Labels, `overlay.ts` (Gebäude-Icons, Einheiten, Flugbahnen, Effekte) |
-| `src/ui/` | `custom-maps.ts` (Bounding-Box-Formular, JSON-Import/-Export) |
-| `src/main.ts` | Karte, Menü, Lobby, HUD, Aktions-Panel, Angebote, Eingaben, Spielschleife |
+| `src/render/` | Territory-Canvas, Labels, `flag.ts` (Flaggen), `overlay.ts` (Gebäude-Icons, Einheiten, Flugbahnen, Effekte, Fronten, Gefahrenzonen, Bau-Ghost) |
+| `src/ui/` | `nation-editor.ts`, `radial.ts` (Kontextmenü), `cursors.ts`, `custom-maps.ts` (Bounding-Box-Formular, JSON-Import/-Export) |
+| `src/main.ts` | Karte, Menü, Lobby, HUD, Radialmenü, Hotkeys, Alarme, Angebote, Eingaben, Spielschleife |
 | `.claude/commands/` | Projekt-Skills: `/verify` (Tests, Build, Browser, Doku, Commit) und `/add-content` (neue Gebäude/Einheiten/Karten) |
 
 Im Browser liegt unter `window.osmFront` ein Handle (`map`, `mapRegistry`, `session()`, `lobby()`) für Konsole und
-Browser-Tests. `session()` liefert u. a. `game`, `proj`, `pack`, `lockstep` und `me` (die eigene Fraktion).
+Browser-Tests. `session()` liefert u. a. `game`, `proj`, `pack`, `lockstep` und `me` (die eigene Fraktion);
+`mode()` und `ghost()` zeigen Bau-/Zielmodus und Vorschau.
 
 ## Vorgehensweise
 
@@ -287,24 +317,28 @@ Bekannte Grenzen nach Phase 3:
 - Keine TURN-Server: hinter strengen Firmen-/Mobilfunk-NATs kommt womöglich keine Verbindung zustande.
 - Eigene Karten bekommen ihre Nationen nur aus dem Katalog; andere Spawns verlangen Handarbeit am JSON.
 
-### Phase 4 – QoL, In-World-Steuerung, Bau-Ghost, Kampf-Alarme & Nationen-Editor
+### Phase 4 – QoL, In-World-Steuerung, Bau-Ghost, Kampf-Alarme & Nationen-Editor (abgeschlossen)
 
-- [ ] **Nationen-Editor** (Startmenü & Lobby): Nations- und Herrschername, Primär-/Sekundärfarbe, Flaggen-Baukasten
-      (Vorlagen Triband horizontal/vertikal, Kreuz, Diagonal, Kreis + Farben + Emblem), Doktrin mit leichtem,
-      deterministischem Bonus (*Industriemacht* +15 % Fabrik-Einkommen, *Seemacht* Häfen & Schiffe 20 % günstiger,
-      *Festungsdoktrin* Bunker +20 % Verteidigung, *Expansionsdrang* +10 % Bevölkerungswachstum). Speicherung im
-      `localStorage`, Synchronisation an alle Peers; Flagge auf der Karte, in der Rangliste und im Diplomatie-Menü.
-- [ ] **Kontext-Radialmenü am Klickpunkt** statt Seitenfenster: Bau-Rad + Truppen-Sammelpunkt auf eigenem Gebiet;
-      Bodenangriff (mit Truppen-Regler am Menü), Landung, Luftschlag/Rakete und Diplomatie auf fremdem Gebiet;
-      Kriegsschiff-Patrouille und See-Invasion auf Wasser. Schließt bei Klick daneben oder `ESC`.
-- [ ] **Hotkeys & Bau-Ghost:** `1`–`7` = `City`, `Factory`, `Bunker`, `Port`, `Airfield`, `MissileSilo`, `SAMSite`;
-      Hotkey-Leiste unten mit Kosten; `ESC`/Rechtsklick bricht ab. Halbtransparente Vorschau unter dem Mauszeiger
-      mit Wirkungs-/Schutz-/Verbindungsradius, grün/rot je nach Baubarkeit, mit Texthinweis am Cursor.
-- [ ] **Angriffswarnungen & Gefechts-Indikatoren:** pulsierendes Leuchten an umkämpften Grenzen mit Kampfsymbol
-      und Truppenzahlen; klickbare Warn-Banner mit Richtungsanzeige (Bodenoffensive, Landung, Luftangriff,
-      Rakete), Klick zentriert die Kamera; blinkende Gefahrenzone am Ziel anfliegender Raketen.
-- [ ] **Dynamischer Custom Cursor:** taktischer Zeiger, Angriffs-, Landungs-, Bau- und Zielerfassungs-Cursor.
-- [ ] Vitest-Tests für Doktrinen und die Synchronisation der Nationsdaten; Browser-Prüfung aller fünf Punkte.
+- [x] **Nationen-Editor** (Startmenü & Lobby): Nations- und Herrschername, Gebiets-/Grenzfarbe, Flaggen-Baukasten
+      (fünf Vorlagen, drei Farben, acht Embleme), Doktrin. Speicherung im `localStorage`, Synchronisation an alle
+      Peers; Flagge auf der Karte, in der Rangliste, in der Lobby und im Diplomatie-Menü.
+- [x] **Kontext-Radialmenü am Klickpunkt** statt Seitenfenster, mit Truppen-Regler am Menü und Diplomatie-Untermenü.
+- [x] **Hotkeys & Bau-Ghost:** `1`–`7` Gebäude, zusätzlich `8` Bomber und `9` Rakete als Zielmodus; Hotkey-Leiste
+      mit Kosten; Vorschau mit Radien, Verbindungslinie und grün/rotem Hinweis; `ESC`/Rechtsklick bricht ab.
+- [x] **Angriffswarnungen & Gefechts-Indikatoren:** leuchtende Front mit `⚔ Angreifer vs Verteidiger`, klickbare
+      Alarme mit Richtungspfeil und Kamera-Sprung, blinkende Gefahrenzone am Ziel von Bomben und Raketen.
+- [x] **Dynamischer Custom Cursor:** fünf SVG-Zeiger je nach Zustand.
+- [x] Geprüft mit 74 Vitest-Tests (Doktrinen, Bereinigung und Synchronisation der Nationsdaten, Sammelpunkt,
+      Bau-Prüfung) und im Browser: Flagge im Editor gebaut und nach Reload wieder da; Radialmenü auf eigenem,
+      fremdem Gebiet und Wasser; Hotkeys mit grünem und rotem Ghost; alle fünf Cursor-Zustände; Bodenangriff-
+      und Raketenalarm mit Kamera-Sprung; zwei Tabs mit verschiedenen Nationen und gleichem Zustands-Hash.
+
+Bekannte Grenzen nach Phase 4:
+
+- KI-Nationen haben weder Flagge noch Doktrin; sie behalten ihr Symbol.
+- Front-Leuchten und Kampfzahlen gibt es nur für Fronten, an denen der Spieler beteiligt ist.
+- Das Radialmenü erklärt seine Knöpfe beim Überfahren mit der Maus; auf Touch-Geräten ist das ungetestet.
+- Der Sammelpunkt ist eine reine Verteidigungshilfe; Truppen bewegen sich in diesem Spiel nicht einzeln.
 
 ### Phase 5 – Audio & Feinschliff
 
