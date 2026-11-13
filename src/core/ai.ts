@@ -55,7 +55,10 @@ function fight(g: Game, f: Faction): void {
     const status = g.diplo.status(g, f.id, id);
     if (status === 'War') {
       if (!foe || n.troops < foe.troops) foe = n;
-    } else if (status === 'Neutral' && g.diplo.relation(f.id, id) < 50 && (!prey || n.troops < prey.troops)) prey = n;
+    } else if (status === 'Neutral' && g.diplo.relation(f.id, id) < 50 && (!prey || n.troops < prey.troops)) {
+      // Players get a head start: for a while at the beginning the AI does not pick them as prey.
+      if (n.type !== 'HUMAN_NATION' || g.tick >= g.level.peaceTicks) prey = n;
+    }
   }
   if (foe && f.troops * 10 > foe.troops * 8) {
     g.attack(f.id, foe.id, f.elite ? 60 : 40);

@@ -45,8 +45,22 @@ export interface Attack {
   pending: number;
 }
 
+export type Difficulty = 'easy' | 'normal' | 'hard';
+
+/**
+ * How the AI is held back or favoured: its population growth in percent, the
+ * ticks before it may pick a player as prey, and its appetite for war in percent.
+ */
+export const DIFFICULTY: Record<Difficulty, { aiGrowthPct: number; peaceTicks: number; aggressionPct: number }> = {
+  easy: { aiGrowthPct: 70, peaceTicks: 1200, aggressionPct: 60 },
+  normal: { aiGrowthPct: 100, peaceTicks: 450, aggressionPct: 100 },
+  hard: { aiGrowthPct: 125, peaceTicks: 0, aggressionPct: 120 },
+};
+
 export interface GameOptions {
   seed: number;
+  /** Default: normal. */
+  difficulty?: Difficulty;
   /** Per-terrain multiplier on conquest delay and cost, indexed by terrain id. */
   terrainWeights?: ArrayLike<number | undefined>;
 }
@@ -68,6 +82,7 @@ export class Game {
   tick = 0;
   readonly landCells: number;
   readonly rng: () => number;
+  readonly level: (typeof DIFFICULTY)[Difficulty];
   private readonly delay: number[];
 
   buildings: Building[] = [];
@@ -85,6 +100,8 @@ export class Game {
   nextId = 1;
   /** Set when buildings changed; the derived economy is refreshed on the next tick. */
   dirty = false;
+  /** Bounding box of the cells that changed since `takeChanges` was last called. */
+  private changed = [Infinity, Infinity, -1, -1];
 
   constructor(width: number, height: number, terrain: Uint8Array, options: GameOptions) {
     if (terrain.length !== width * height) throw new Error('terrain size does not match grid');
@@ -97,6 +114,7 @@ export class Game {
     this.fortSlow = new Uint8Array(width * height);
     this.fallout = new Uint32Array(width * height);
     this.rng = mulberry32(options.seed);
+    this.level = DIFFICULTY[options.difficulty ?? 'normal'] ?? DIFFICULTY.normal;
     this.delay = CONQUER_DELAY.map((d, t) =>
       d === 0 ? 0 : Math.min(MAX_TERRAIN_DELAY, Math.max(1, Math.round(d * (options.terrainWeights?.[t] ?? 1)))),
     );
@@ -137,6 +155,27 @@ export class Game {
       }
     }
     return -1;
+  }
+
+  /** Notes that a cell looks different now (new owner, fallout). */
+  touch(cell: number): void {
+    const x = cell % this.width;
+    const y = (cell - x) / this.width;
+    const c = this.changed;
+    if (x < c[0]) c[0] = x;
+    if (y < c[1]) c[1] = y;
+    if (x > c[2]) c[2] = x;
+    if (y > c[3]) c[3] = y;
+  }
+
+  /**
+   * The box [minX, minY, maxX, maxY] around everything that changed since the
+   * last call, or null. For a renderer that wants to repaint only that part.
+   */
+  takeChanges(): number[] | null {
+    const c = this.changed;
+    this.changed = [Infinity, Infinity, -1, -1];
+    return c[2] < 0 ? null : c;
   }
 
   emit(type: GameEvent['type'], cell: number, radius: number): void {
@@ -273,7 +312,10 @@ export class Game {
       f.gold += f.income;
       const max = this.maxTroops(f);
       // Logistic growth, fastest at half capacity, plus a base rate so a drained empire recovers.
-      if (f.troops < max) f.troops += ((max / 50 + (f.troops * (max - f.troops)) / max) * rulesOf(f).growth * (100 + f.growthPct + f.bonus.growthPct)) / 100000;
+      if (f.troops < max) {
+        const grown = ((max / 50 + (f.troops * (max - f.troops)) / max) * rulesOf(f).growth * (100 + f.growthPct + f.bonus.growthPct)) / 100000;
+        f.troops += f.type === 'HUMAN_NATION' ? grown : (grown * this.level.aiGrowthPct) / 100;
+      }
       // Each AI thinks every two seconds, staggered by id.
       if (f.type !== 'HUMAN_NATION' && (this.tick + f.id * 3) % (2 * TICKS_PER_SECOND) === 0) decide(this, f);
     }
@@ -314,7 +356,7 @@ export class Game {
       bonus: bonusOf(spec.nation?.doctrine),
       rally: -1,
       alive: true,
-      aggression: spec.type === 'AI_NATION' ? 40 + Math.floor(this.rng() * 50) : 5,
+      aggression: spec.type === 'AI_NATION' ? Math.min(100, Math.floor(((40 + Math.floor(this.rng() * 50)) * this.level.aggressionPct) / 100)) : 5,
       lastAttacker: 0,
       neighbors: [],
       bordersNeutral: false,
@@ -362,6 +404,11 @@ export class Game {
       if (y > f.maxY) f.maxY = y;
     }
     this.owner[cell] = to;
+    const c = this.changed;
+    if (x < c[0]) c[0] = x;
+    if (y < c[1]) c[1] = y;
+    if (x > c[2]) c[2] = x;
+    if (y > c[3]) c[3] = y;
   }
 
   private isTarget(cell: number, target: number): boolean {

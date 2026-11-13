@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NEUTRAL } from './game';
+import { Game, NEUTRAL } from './game';
 import { mulberry32 } from './rng';
 import { Terrain } from './terrain';
 import { at, human, run, world } from './testkit';
@@ -133,5 +133,55 @@ describe('determinism', () => {
     for (const o of g.owner) cells[o]++;
     for (const f of g.factions.slice(1)) expect(f.cells).toBe(cells[f.id]);
     for (let i = 0; i < g.owner.length; i++) if (g.terrain[i] === WATER) expect(g.owner[i]).toBe(NEUTRAL);
+  });
+});
+
+describe('difficulty', () => {
+  const duel = (difficulty: 'easy' | 'normal' | 'hard', seed = 5) => {
+    const terrain = new Uint8Array(60 * 30).fill(PLAINS);
+    const g = new Game(60, 30, terrain, { seed, difficulty });
+    const me = g.addFaction({ name: 'Mensch', type: 'HUMAN_NATION' }, at(g, 10, 15))!;
+    const ai = g.addFaction({ name: 'KI', type: 'AI_NATION' }, at(g, 21, 15))!;
+    return { g, me, ai };
+  };
+
+  it('lets the AI grow slower on easy and faster on hard, and leaves players alone', () => {
+    const grown = (difficulty: 'easy' | 'normal' | 'hard') => {
+      const { g, me, ai } = duel(difficulty);
+      ai.troops = me.troops = 500;
+      run(g, 10); // before the AI spends anything
+      return [me.troops - 500, ai.troops - 500];
+    };
+    const [easy, normal, hard] = [grown('easy'), grown('normal'), grown('hard')];
+    expect(easy[0]).toBe(normal[0]);
+    expect(hard[0]).toBe(normal[0]);
+    expect(easy[1] / normal[1]).toBeCloseTo(0.7, 1);
+    expect(hard[1] / normal[1]).toBeCloseTo(1.25, 1);
+  });
+
+  it('gives players a head start before the AI may pick on them', () => {
+    // Fenced in: the AI's only neighbour is the player, far weaker than itself.
+    const attackedAt = (difficulty: 'easy' | 'normal' | 'hard') => {
+      const terrain = new Uint8Array(40 * 13).fill(WATER);
+      for (let y = 1; y < 12; y++) for (let x = 1; x < 39; x++) terrain[y * 40 + x] = PLAINS;
+      const g = new Game(40, 13, terrain, { seed: 9, difficulty });
+      const me = g.addFaction({ name: 'Mensch', type: 'HUMAN_NATION' }, at(g, 8, 6))!;
+      const ai = g.addFaction({ name: 'KI', type: 'AI_NATION' }, at(g, 30, 6))!;
+      ai.aggression = 100;
+      for (let t = 0; t < 2000; t++) {
+        me.troops = 100;
+        g.step();
+        if (g.attacks.some((a) => a.attacker === ai.id && a.target === me.id)) return g.tick;
+      }
+      return Infinity;
+    };
+    const hard = attackedAt('hard');
+    const normal = attackedAt('normal');
+    const easy = attackedAt('easy');
+    expect(hard).toBeLessThan(450);
+    expect(normal).toBeGreaterThanOrEqual(450);
+    expect(normal).toBeLessThan(1200);
+    expect(easy).toBeGreaterThanOrEqual(1200);
+    expect(easy).toBeLessThan(2000);
   });
 });

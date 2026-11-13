@@ -1,4 +1,4 @@
-import { Game } from './game';
+import { Game, type Difficulty } from './game';
 import { GridProjection } from './maps/projection';
 import type { MapPackDefinition } from './maps/types';
 import { Terrain, type TerrainName } from './terrain';
@@ -23,10 +23,10 @@ function tribeName(rng: () => number): string {
  * Builds a game on `terrain` and populates it from the map pack: nations and
  * named tribes at their spawn points, then random tribes on the land left over.
  */
-export function createGame(pack: MapPackDefinition, proj: GridProjection, terrain: Uint8Array, seed: number): Game {
+export function createGame(pack: MapPackDefinition, proj: GridProjection, terrain: Uint8Array, seed: number, difficulty: Difficulty = 'normal'): Game {
   const weights: number[] = [];
   for (const [name, w] of Object.entries(pack.terrainWeights ?? {})) weights[Terrain[name as TerrainName]] = w;
-  const game = new Game(proj.width, proj.height, terrain, { seed, terrainWeights: weights });
+  const game = new Game(proj.width, proj.height, terrain, { seed, terrainWeights: weights, difficulty });
   const { rng } = game;
 
   let elites = 0;

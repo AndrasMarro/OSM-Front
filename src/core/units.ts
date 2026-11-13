@@ -383,6 +383,7 @@ function blast(g: Game, u: Unit): void {
       if (b) damage(g, b, buildingDamage);
       if (neutralize) {
         g.fallout[cell] = g.tick + FALLOUT_TICKS;
+        g.touch(cell);
         if (owner) g.setOwner(cell, NEUTRAL);
       }
     }
