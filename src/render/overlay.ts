@@ -46,6 +46,39 @@ export interface View {
   ghost: Ghost | null;
 }
 
+/** Below this many pixels per cell the map is seen from so far away that buildings shrink to dots. */
+const DOT_BELOW_CELL_PX = 1.6;
+/** Badges are drawn once, at this multiple of their size, and then only copied: sharp on dense screens, and fast. */
+const SPRITE_SCALE = 2;
+const badges = new Map<string, HTMLCanvasElement>();
+
+function badge(icon: string, color: string, size: number): HTMLCanvasElement {
+  const key = `${icon}|${color}|${size}`;
+  let sprite = badges.get(key);
+  if (!sprite) {
+    const r = size * 0.68;
+    const side = Math.ceil((r + 2) * 2 * SPRITE_SCALE);
+    sprite = Object.assign(document.createElement('canvas'), { width: side, height: side });
+    const c = sprite.getContext('2d')!;
+    c.scale(SPRITE_SCALE, SPRITE_SCALE);
+    const mid = side / (2 * SPRITE_SCALE);
+    c.beginPath();
+    c.arc(mid, mid, r, 0, Math.PI * 2);
+    c.fillStyle = 'rgb(16 20 26 / 88%)';
+    c.fill();
+    c.lineWidth = 2;
+    c.strokeStyle = `rgb(${color})`;
+    c.stroke();
+    c.fillStyle = '#fff';
+    c.font = `${size}px system-ui, sans-serif`;
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText(icon, mid, mid + 1);
+    badges.set(key, sprite);
+  }
+  return sprite;
+}
+
 /** Front cells of one attack drawn at most; longer fronts are thinned out. */
 const FRONT_SAMPLES = 500;
 
@@ -91,10 +124,16 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, gam
   const { me, selected, ghost } = view;
   const w = game.width;
   const { clientWidth, clientHeight } = ctx.canvas;
-  const at = (x: number, y: number) => map.project(proj.lngLat(x + 0.5, y + 0.5));
+  // The grid is linear in Web Mercator and the map is never rotated or tilted, so two projected
+  // corners give every other position by plain arithmetic - hundreds of times per frame.
+  const corner = map.project(proj.lngLat(0, 0));
+  const far = map.project(proj.lngLat(w, game.height));
+  const kx = (far.x - corner.x) / w;
+  const ky = (far.y - corner.y) / game.height;
+  const at = (x: number, y: number) => ({ x: corner.x + (x + 0.5) * kx, y: corner.y + (y + 0.5) * ky });
   const ofCell = (cell: number) => at(cell % w, Math.floor(cell / w));
   const visible = (p: { x: number; y: number }, margin = 40) => p.x > -margin && p.y > -margin && p.x < clientWidth + margin && p.y < clientHeight + margin;
-  const cellPx = (at(w, 0).x - at(0, 0).x) / w;
+  const cellPx = kx;
   const rgb = (id: number) => factionColor(game.factions[id]).join(' ');
   const pulse = 0.5 + 0.5 * Math.sin(now / 160);
   const ring = (p: { x: number; y: number }, r: number) => {
@@ -164,21 +203,25 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, gam
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // Buildings: a badge in the owner's colour.
-  const size = Math.max(13, Math.min(22, cellPx * 2.5));
-  for (const b of game.buildings) {
-    const p = ofCell(b.cell);
-    if (!visible(p)) continue;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, size * 0.68, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgb(16 20 26 / 88%)';
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = `rgb(${rgb(b.owner)})`;
-    ctx.stroke();
-    ctx.fillStyle = '#fff';
-    ctx.font = `${size}px system-ui, sans-serif`;
-    ctx.fillText(b.def.icon, p.x, p.y + 1);
+  // Buildings: a badge in the owner's colour - or, seen from far away where badges would only
+  // pile up, a dot.
+  if (cellPx < DOT_BELOW_CELL_PX) {
+    for (const b of game.buildings) {
+      const p = ofCell(b.cell);
+      if (!visible(p, 4)) continue;
+      ctx.fillStyle = 'rgb(16 20 26)';
+      ctx.fillRect(p.x - 3, p.y - 3, 6, 6);
+      ctx.fillStyle = `rgb(${rgb(b.owner)})`;
+      ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+    }
+  } else {
+    const size = Math.round(Math.max(13, Math.min(22, cellPx * 2.5)));
+    for (const b of game.buildings) {
+      const p = ofCell(b.cell);
+      if (!visible(p)) continue;
+      const sprite = badge(b.def.icon, rgb(b.owner), size);
+      ctx.drawImage(sprite, p.x - sprite.width / (2 * SPRITE_SCALE), p.y - sprite.height / (2 * SPRITE_SCALE), sprite.width / SPRITE_SCALE, sprite.height / SPRITE_SCALE);
+    }
   }
 
   // Units: the route ahead as marching dashes, then the marker turned into its heading.

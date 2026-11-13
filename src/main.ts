@@ -6,7 +6,7 @@ import type { CommandResult } from './core/commands';
 import type { DiplomaticStatus, Treaty } from './core/diplomacy';
 import type { Faction } from './core/faction';
 import type { NationProfile } from './core/nation';
-import { NEUTRAL, TICKS_PER_SECOND, type Game } from './core/game';
+import { DIFFICULTY, NEUTRAL, TICKS_PER_SECOND, type Difficulty, type Game, type GameEvent } from './core/game';
 import { GridProjection } from './core/maps/projection';
 import { mapRegistry, validateMapPack } from './core/maps/registry';
 import type { MapPackDefinition } from './core/maps/types';
@@ -26,6 +26,7 @@ import { setCursor, type CursorKind } from './ui/cursors';
 import { exportPack, setupCustomMaps } from './ui/custom-maps';
 import { setupNationEditor } from './ui/nation-editor';
 import { Radial, type RadialItem, type RadialSpec } from './ui/radial';
+import { getVolume, play, played, setVolume, type Sound } from './ui/sound';
 
 const BASEMAP_STYLE = 'https://tiles.openfreemap.org/styles/positron';
 const LAYER = 'territory';
@@ -72,6 +73,10 @@ interface Session {
   offers: string;
   /** What to tell the player about each of their commands still on its way through the host. */
   feedback: ((result: CommandResult) => string)[];
+  /** Events up to this tick have been heard. */
+  heardTick: number;
+  /** The most land the player ever held, for the summary at the end. */
+  peakCells: number;
 }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -108,6 +113,60 @@ let busy = false;
 
 const me = () => session?.lockstep.me ?? null;
 
+const difficultySelect = $<HTMLSelectElement>('difficulty');
+difficultySelect.value = localStorage.getItem('osm-front:difficulty') ?? 'normal';
+difficultySelect.addEventListener('change', () => localStorage.setItem('osm-front:difficulty', difficultySelect.value));
+
+// --- sound, help and the end of a game -------------------------------------------
+
+/** What a successful order sounds like, by kind; anything else gets the plain confirmation. */
+const ORDER_SOUND: Partial<Record<PlayerCommand['type'], Sound>> = { build: 'build', attack: 'attack', spawn: 'build' };
+const EVENT_SOUND: Record<GameEvent['type'], Sound> = { explosion: 'explosion', nuke: 'nuke', intercept: 'intercept', landing: 'landing', repelled: 'hit', hit: 'hit', sunk: 'explosion' };
+
+const volumeSlider = $<HTMLInputElement>('volume');
+/** The volume before muting, to come back to. */
+let unmuted = getVolume() || 0.6;
+function showVolume(): void {
+  volumeSlider.value = `${Math.round(getVolume() * 100)}`;
+  $('volume-value').textContent = getVolume() === 0 ? 'aus' : `${volumeSlider.value} %`;
+}
+volumeSlider.addEventListener('input', () => {
+  setVolume(Number(volumeSlider.value) / 100);
+  if (getVolume() > 0) unmuted = getVolume();
+  showVolume();
+  play('click');
+});
+showVolume();
+
+const help = $<HTMLDialogElement>('help');
+$('help-open').addEventListener('click', () => help.showModal());
+const gameover = $<HTMLDialogElement>('gameover');
+gameover.addEventListener('close', () => {
+  if (gameover.returnValue === 'menu') showMenu();
+});
+
+/** The game is decided for this player: say so, with what they achieved. */
+function endGame(s: Session, won: boolean, mine: Faction): void {
+  s.over = true;
+  radial.close();
+  setMode(null);
+  play(won ? 'victory' : 'defeat');
+  const seconds = Math.floor(s.game.tick / TICKS_PER_SECOND);
+  const rank = s.game.factions.filter((f) => f.alive && f.cells > mine.cells).length + 1;
+  const stats: [string, string][] = [
+    ['Spielzeit', `${Math.floor(seconds / 60)}:${`${seconds % 60}`.padStart(2, '0')} min`],
+    ['Größte Ausdehnung', `${s.peakCells} Zellen (${((100 * s.peakCells) / s.game.landCells).toFixed(1)} % der Landfläche)`],
+    ['Gebäude am Ende', `${s.game.buildings.filter((b) => b.owner === mine.id).length}`],
+    ...(won ? [] : ([['Stärkste Macht', s.game.factions.filter((f) => f.alive).sort((a, b) => b.cells - a.cells)[0]?.name ?? '–']] as [string, string][])),
+    ...(mine.alive ? ([['Rang', `${rank}`]] as [string, string][]) : []),
+  ];
+  $('gameover-title').textContent = won ? 'Sieg!' : 'Niederlage';
+  $('gameover-text').textContent = won ? `${mine.name} beherrscht die Karte.` : `Das Reich ${mine.name} ist gefallen.`;
+  $('gameover-stats').replaceChildren(...stats.flatMap(([label, value]) => [Object.assign(document.createElement('dt'), { textContent: label }), Object.assign(document.createElement('dd'), { textContent: value })]));
+  showBanner('');
+  gameover.showModal();
+}
+
 // --- small UI helpers --------------------------------------------------------
 
 let toastTimer = 0;
@@ -140,11 +199,13 @@ function order(cmd: PlayerCommand, say: (result: CommandResult) => string): void
 function refreshMapButtons(): void {
   const locked = busy || (lobby !== null && !lobby.isHost);
   for (const b of $('maps').querySelectorAll('button')) b.disabled = locked;
+  difficultySelect.disabled = locked;
 }
 
 function showMenu(): void {
   generation++;
   if (session && lobby?.isHost) void lobby.net.send('end', 1);
+  if (gameover.open) gameover.close('watch');
   lobby?.net.on('turn', () => {}); // a game we left no longer listens
   session = null;
   busy = false;
@@ -170,14 +231,19 @@ function showMenu(): void {
  * alone and for a client alike; the game and its lockstep exist before the
  * first await, so no turn sent right after the start can be missed.
  */
-async function begin(pack: MapPackDefinition, terrain: Uint8Array, seed: number, hostId?: string): Promise<void> {
+async function begin(pack: MapPackDefinition, terrain: Uint8Array, seed: number, difficulty: Difficulty, hostId?: string): Promise<void> {
   const mine = ++generation;
   const proj = new GridProjection(pack.bbox, pack.grid.width);
-  const game = createGame(pack, proj, terrain, seed);
+  const game = createGame(pack, proj, terrain, seed, difficulty);
   const lockstep = new Lockstep(game, lobby?.net ?? null, hostId);
   const painter = new TerritoryPainter(proj.width, proj.height);
-  const s: Session = { pack, proj, game, lockstep, painter, over: false, running: false, startedAt: performance.now(), selected: -1, wars: new Set(), offers: '', feedback: [] };
-  lockstep.onResult = (_cmd, result) => toast(s.feedback.shift()?.(result) ?? '');
+  const s: Session = { pack, proj, game, lockstep, painter, over: false, running: false, startedAt: performance.now(), selected: -1, wars: new Set(), offers: '', feedback: [], heardTick: -1, peakCells: 0 };
+  lockstep.onResult = (cmd, result) => {
+    toast(s.feedback.shift()?.(result) ?? '');
+    // The free-land shortcut fires on every click there; its refusals are not worth a buzz.
+    if (result === 'ok' || result === 'pending') play(ORDER_SOUND[cmd.type] ?? 'order');
+    else if (!(cmd.type === 'attack' && cmd.target === NEUTRAL)) play('refuse');
+  };
   if (map.getLayer(LAYER)) map.removeLayer(LAYER);
   if (map.getSource(LAYER)) map.removeSource(LAYER);
   session = s;
@@ -211,7 +277,13 @@ async function begin(pack: MapPackDefinition, terrain: Uint8Array, seed: number,
   busy = false;
   menu.hidden = true;
   hud.hidden = false;
+  $<HTMLProgressElement>('loading').hidden = true;
   dirty = true;
+  // First game in this browser: show how it is played.
+  if (!localStorage.getItem('osm-front:seen-help')) {
+    localStorage.setItem('osm-front:seen-help', '1');
+    help.showModal();
+  }
 }
 
 /** Loads a map's terrain and starts the game - for everybody in the room, if there is one. */
@@ -220,22 +292,27 @@ async function startMap(pack: MapPackDefinition): Promise<void> {
   busy = true;
   refreshMapButtons();
   status.textContent = `Lade Terrain für ${pack.name} …`;
+  const loading = $<HTMLProgressElement>('loading');
+  loading.removeAttribute('value'); // indeterminate until the first tile is in
+  loading.hidden = false;
   try {
     const proj = new GridProjection(pack.bbox, pack.grid.width);
-    const terrain = await loadTerrain(pack, proj, (done, total) => (status.textContent = `Lade Terrain für ${pack.name} … ${Math.round((100 * done) / total)} %`));
+    const terrain = await loadTerrain(pack, proj, (done, total) => (loading.value = done / total));
     if (mine !== generation) return;
     const seed = (Math.random() * 2 ** 32) >>> 0;
+    const difficulty = difficultySelect.value as Difficulty;
     // Everybody plays on the host's grid: no peer derives terrain of its own that could differ.
     // A mask inside the pack would only be dead weight on the wire.
     if (lobby) {
-      await lobby.net.send('start', { pack: { ...pack, terrain: { type: 'osm' } }, seed });
+      await lobby.net.send('start', { pack: { ...pack, terrain: { type: 'osm' } }, seed, difficulty });
       await lobby.net.send('grid', terrain);
     }
     if (mine !== generation) return;
-    await begin(pack, terrain, seed);
+    await begin(pack, terrain, seed, difficulty);
   } catch (err) {
     if (mine !== generation) return;
     console.error(err);
+    loading.hidden = true;
     status.textContent = `Terrain konnte nicht geladen werden (${err instanceof Error ? err.message : err}). Bitte erneut versuchen.`;
     busy = false;
     refreshMapButtons();
@@ -328,7 +405,7 @@ async function enterRoom(id: string): Promise<void> {
   lobby = new Lobby(net, sessionStorage.getItem(hostKey(id)) === '1', nation);
   lobby.onChange = renderLobby;
   // The host's game arrives as the map and the seed, followed by its terrain grid.
-  let announced: { pack: MapPackDefinition; seed: number } | null = null;
+  let announced: { pack: MapPackDefinition; seed: number; difficulty: Difficulty } | null = null;
   net.on('start', (data, from) => {
     if (from === lobby!.hostId && !lobby!.isHost) announced = data;
   });
@@ -342,7 +419,7 @@ async function enterRoom(id: string): Promise<void> {
       $('lobby-status').textContent = 'Der Host hat eine ungültige Karte gesendet.';
       return;
     }
-    void begin(start.pack, terrain, start.seed >>> 0, from);
+    void begin(start.pack, terrain, start.seed >>> 0, start.difficulty in DIFFICULTY ? start.difficulty : 'normal', from);
   });
   net.on('end', (_data, from) => {
     if (from === lobby!.hostId && session) {
@@ -453,8 +530,11 @@ function updateCursor(): void {
 }
 
 function setMode(next: Mode): void {
+  if (next) {
+    radial.close();
+    play('click');
+  }
   mode = next;
-  if (next) radial.close();
   refreshHotbar();
   updateGhost();
   updateCursor();
@@ -506,7 +586,15 @@ function refreshHotbar(): void {
 
 addEventListener('keydown', (e) => {
   if (e.key === 'Escape') setMode(null);
-  if (!session || !me()?.alive || !menu.hidden || e.ctrlKey || e.metaKey || e.altKey || (e.target as HTMLElement).closest?.('input, select, textarea')) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || (e.target as HTMLElement).closest?.('input:not([type=range]), select, textarea, dialog')) return;
+  if (e.key === 'm' || e.key === 'M') {
+    setVolume(getVolume() > 0 ? 0 : unmuted);
+    showVolume();
+    toast(getVolume() > 0 ? 'Ton an.' : 'Ton aus.');
+  }
+  if (!session || !menu.hidden) return;
+  if (e.key === 'h' || e.key === 'H') help.showModal();
+  if (!me()?.alive) return;
   const slot = slots.find((s) => s.key === e.key);
   if (slot) toggleSlot(slot);
 });
@@ -714,6 +802,7 @@ function openMenu(cell: number, x: number, y: number): void {
     };
   }
   radial.open(x, y, spec);
+  play('click');
   s.selected = cell;
   menuOwner = owner;
 }
@@ -770,6 +859,7 @@ function renderAlarms(game: Game, mine: Faction): void {
       });
       alarmButtons.set(t.key, button);
       box.append(button);
+      play('alarm');
     }
     // Which way to look: an arrow towards the threat, or a mark if it is already in view.
     const p = map.project(session!.proj.lngLat((t.cell % game.width) + 0.5, Math.floor(t.cell / game.width) + 0.5));
@@ -793,6 +883,7 @@ function renderOffers(game: Game, mine: Faction): void {
   const offers = game.diplo.offersTo(game, mine.id);
   const signature = offers.map((o) => `${o.from}:${o.treaty}`).join();
   if (!session || signature === session.offers) return;
+  if (signature.length > session.offers.length) play('offer');
   session.offers = signature;
   $('offers').hidden = offers.length === 0;
   $('offers').replaceChildren(
@@ -816,6 +907,8 @@ function renderHud(): void {
   const stats = $('stats');
   if (mine) {
     const share = ((100 * mine.cells) / game.landCells).toFixed(1);
+    session.peakCells = Math.max(session.peakCells, mine.cells);
+    const seconds = Math.floor(game.tick / TICKS_PER_SECOND);
     const d = game.diplo;
     const names = (ids: number[]) => {
       const alive = ids.map((id) => game.factions[id]).filter((f) => f.alive);
@@ -839,13 +932,27 @@ function renderHud(): void {
       Object.assign(document.createElement('span'), { className: 'gold', textContent: `${Math.floor(mine.gold)} Gold` }),
       ` · +${mine.income.toFixed(2)}/Tick`,
       document.createElement('br'),
-      `${mine.cells} Zellen · ${share} % der Landfläche`,
+      `${mine.cells} Zellen · ${share} % der Landfläche · ${Math.floor(seconds / 60)}:${`${seconds % 60}`.padStart(2, '0')}`,
       Object.assign(document.createElement('span'), { className: 'diplo', textContent: relations.length ? relations.map(([label, value]) => `${label}: ${value}`).join(' · ') : 'Keine Bündnisse, kein Krieg.' }),
     );
     renderOffers(game, mine);
     renderAlarms(game, mine);
   } else stats.textContent = `${session.pack.name}: ${game.factions.filter((f) => f.alive).length} Fraktionen warten.`;
 
+  // The ranking is rebuilt twice a second: often enough to follow, rarely enough to stay cheap.
+  if (game.tick % 5 === 0 || !$('leaderboard').hasChildNodes()) renderLeaderboard(game, mine);
+
+  if (session.over) return;
+  if (session.lockstep.desynced) {
+    session.over = true;
+    showBanner('Die Synchronisation mit dem Host ist verloren gegangen – für dich ist dieses Spiel vorbei.');
+  } else if (!mine) showBanner('Wähle dein Startgebiet: Klicke auf freies Land.');
+  else if (!mine.alive) endGame(session, false, mine);
+  else if (!game.factions.some((f) => f.alive && f !== mine) || mine.cells >= game.landCells * VICTORY_SHARE) endGame(session, true, mine);
+  else showBanner(game.tick === 0 && lobby ? 'Warte auf die Mitspieler – gleich geht es los.' : '');
+}
+
+function renderLeaderboard(game: Game, mine: Faction | null): void {
   const ranked = game.factions.filter((f) => f.alive).sort((a, b) => b.cells - a.cells || a.id - b.id);
   // The top eight, and every player below them with their true rank.
   $('leaderboard').replaceChildren(
@@ -860,28 +967,31 @@ function renderHud(): void {
       return [li];
     }),
   );
+}
 
-  if (session.over) return;
-  if (session.lockstep.desynced) {
-    session.over = true;
-    showBanner('Die Synchronisation mit dem Host ist verloren gegangen – für dich ist dieses Spiel vorbei.');
-  } else if (!mine) showBanner('Wähle dein Startgebiet: Klicke auf freies Land.');
-  else if (!mine.alive) {
-    session.over = true;
-    showBanner('Niederlage – dein Reich ist gefallen.');
-  } else if (!game.factions.some((f) => f.alive && f !== mine) || mine.cells >= game.landCells * VICTORY_SHARE) {
-    session.over = true;
-    showBanner('Sieg! Du beherrschst die Karte.');
-  } else showBanner(game.tick === 0 && lobby ? 'Warte auf die Mitspieler – gleich geht es los.' : '');
+/** Plays what happened in the world since the last look: loud if it is on screen, faint if it is not. */
+function hearEvents(s: Session): void {
+  const { game, proj } = s;
+  const { clientWidth, clientHeight } = map.getContainer();
+  for (const e of game.events) {
+    if (e.tick <= s.heardTick) continue;
+    const p = map.project(proj.lngLat((e.cell % game.width) + 0.5, Math.floor(e.cell / game.width) + 0.5));
+    const inView = p.x >= 0 && p.y >= 0 && p.x <= clientWidth && p.y <= clientHeight;
+    // A nuclear blast is heard everywhere.
+    play(EVENT_SOUND[e.type], inView ? 1 : e.type === 'nuke' ? 0.6 : 0.15);
+  }
+  s.heardTick = game.tick - 1;
 }
 
 function repaint(s: Session): void {
-  s.painter.paint(s.game);
-  // A paused canvas source re-reads its canvas exactly once per play/pause pair.
-  const source = map.getSource<CanvasSource>(LAYER);
-  source?.play();
-  source?.pause();
+  if (s.painter.paint(s.game)) {
+    // A paused canvas source re-reads its canvas exactly once per play/pause pair.
+    const source = map.getSource<CanvasSource>(LAYER);
+    source?.play();
+    source?.pause();
+  }
   renderHud();
+  hearEvents(s);
   refreshMenu();
   refreshHotbar();
   updateGhost();
@@ -939,4 +1049,4 @@ function frame(now: number): void {
 requestAnimationFrame(frame);
 
 // Handle for the browser console and automated browser tests.
-Object.assign(window, { osmFront: { map, mapRegistry, session: () => session && { ...session, me: me() }, lobby: () => lobby, mode: () => mode, ghost: () => ghost } });
+Object.assign(window, { osmFront: { map, mapRegistry, session: () => session && { ...session, me: me() }, lobby: () => lobby, mode: () => mode, ghost: () => ghost, sounds: played } });

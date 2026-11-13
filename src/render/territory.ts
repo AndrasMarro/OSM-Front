@@ -36,6 +36,8 @@ const TERRAIN_COUNT = 8;
 const OWNED_SHADE = [1, 1, 1.15, 0.82, 0.66, 1.3, 0.55, 1.4];
 /** Tint of free land. Plains and water stay transparent to show the map underneath. */
 const FREE_TINT = [0, 0, pack(130, 125, 135, 110), pack(46, 120, 60, 95), pack(120, 98, 80, 125), pack(235, 160, 30, 170), pack(70, 70, 80, 170), pack(240, 248, 255, 150)];
+/** The whole grid is repainted at least this often, which is what lets expired fallout fade. */
+const FULL_REPAINT_TICKS = 100;
 /** Irradiated no-man's-land after a nuclear strike. */
 const FALLOUT_TINT = pack(150, 215, 40, 150);
 
@@ -51,6 +53,8 @@ export class TerritoryPainter {
   private fill = new Uint32Array(0);
   private border = new Uint32Array(0);
   private dotted = new Uint8Array(0);
+  /** Tick of the last repaint of the whole grid. */
+  private fullAt = -Infinity;
 
   constructor(width: number, height: number) {
     this.canvas.width = width;
@@ -73,24 +77,40 @@ export class TerritoryPainter {
     }
   }
 
-  paint(game: Game): void {
-    // ponytail: repaints every cell on each change; track dirty rows if grids get much larger.
-    const { owner, terrain, width: w, factions, fallout, tick } = game;
-    if (this.border.length !== factions.length) this.buildPalette(factions);
+  /**
+   * Brings the canvas up to date with the game. Only the box in which cells
+   * changed hands is repainted; the whole grid when a faction is new, and
+   * every ten seconds so that expired fallout fades. Returns false if there
+   * was nothing to do.
+   */
+  paint(game: Game): boolean {
+    const { owner, terrain, width: w, height: h, factions, fallout, tick } = game;
+    const box = game.takeChanges();
+    let full = tick - this.fullAt >= FULL_REPAINT_TICKS;
+    if (this.border.length !== factions.length) {
+      this.buildPalette(factions);
+      full = true;
+    }
+    if (!full && !box) return false;
+    if (full) this.fullAt = tick;
+    // One cell more on every side: a cell's border depends on its neighbours.
+    const x0 = full ? 0 : Math.max(0, box![0] - 1);
+    const y0 = full ? 0 : Math.max(0, box![1] - 1);
+    const x1 = full ? w - 1 : Math.min(w - 1, box![2] + 1);
+    const y1 = full ? h - 1 : Math.min(h - 1, box![3] + 1);
     const { pixels, fill, border, dotted } = this;
     const n = owner.length;
-    for (let i = 0, x = 0, y = 0; i < n; i++) {
-      const o = owner[i];
-      if (o === 0) pixels[i] = fallout[i] > tick ? FALLOUT_TINT : FREE_TINT[terrain[i]];
-      else {
-        const edge = (x > 0 && owner[i - 1] !== o) || (x < w - 1 && owner[i + 1] !== o) || (i >= w && owner[i - w] !== o) || (i < n - w && owner[i + w] !== o);
-        pixels[i] = edge && !(dotted[o] && (x + y) & 1) ? border[o] : fill[o * TERRAIN_COUNT + terrain[i]];
-      }
-      if (++x === w) {
-        x = 0;
-        y++;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0, i = y * w + x0; x <= x1; x++, i++) {
+        const o = owner[i];
+        if (o === 0) pixels[i] = fallout[i] > tick ? FALLOUT_TINT : FREE_TINT[terrain[i]];
+        else {
+          const edge = (x > 0 && owner[i - 1] !== o) || (x < w - 1 && owner[i + 1] !== o) || (i >= w && owner[i - w] !== o) || (i < n - w && owner[i + w] !== o);
+          pixels[i] = edge && !(dotted[o] && (x + y) & 1) ? border[o] : fill[o * TERRAIN_COUNT + terrain[i]];
+        }
       }
     }
-    this.ctx.putImageData(this.image, 0, 0);
+    this.ctx.putImageData(this.image, 0, 0, x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+    return true;
   }
 }

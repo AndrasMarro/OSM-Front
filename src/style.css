@@ -399,6 +399,80 @@ body {
   flex: none;
   padding: 4px 9px;
 }
+#loading {
+  width: 100%;
+  margin-top: 10px;
+  accent-color: #4a90ff;
+}
+dialog {
+  max-width: min(92vw, 560px);
+  padding: 20px 24px;
+  border: 1px solid #3a4658;
+  border-radius: 12px;
+  background: #121821;
+  color: inherit;
+  box-shadow: 0 8px 40px rgb(0 0 0 / 60%);
+}
+dialog::backdrop {
+  background: rgb(8 10 14 / 65%);
+}
+dialog h2 {
+  margin: 0 0 10px;
+}
+dialog dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  margin: 0;
+}
+dialog dt {
+  color: #7db4ff;
+  font-weight: 600;
+  white-space: nowrap;
+}
+dialog dd {
+  margin: 0;
+  color: #cdd5df;
+}
+dialog form {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+kbd {
+  padding: 1px 6px;
+  border: 1px solid #3a4658;
+  border-radius: 4px;
+  background: #1d2633;
+  font: 600 0.85em system-ui, sans-serif;
+}
+/* People who asked their system for less motion get steady warnings instead of pulsing ones. */
+@media (prefers-reduced-motion: reduce) {
+  #alarms button {
+    animation: none;
+  }
+}
+/* Small screens: the HUD gives the map its room back. */
+@media (max-width: 720px) {
+  #hud {
+    width: 190px;
+    font-size: 12px;
+  }
+  #leaderboard li:nth-child(n + 4):not(.me) {
+    display: none;
+  }
+  #hotbar {
+    max-width: calc(100vw - 16px);
+    overflow-x: auto;
+  }
+  #hotbar button {
+    min-width: 40px;
+  }
+  #nation-form {
+    grid-template-columns: 1fr;
+  }
+}
 #status {
   min-height: 1.4em;
   margin: 12px 0 0;
