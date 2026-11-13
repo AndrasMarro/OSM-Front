@@ -1,26 +1,31 @@
 import { Map as MapLibreMap, setWorkerUrl, type CanvasSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
-import { buildingRegistry, price, type OrderResult } from './core/buildings';
+import { buildingRegistry, canBuild, linkedCity, price, type BuildingDefinition, type OrderResult } from './core/buildings';
 import type { CommandResult } from './core/commands';
 import type { DiplomaticStatus, Treaty } from './core/diplomacy';
 import type { Faction } from './core/faction';
+import type { NationProfile } from './core/nation';
 import { NEUTRAL, TICKS_PER_SECOND, type Game } from './core/game';
 import { GridProjection } from './core/maps/projection';
 import { mapRegistry, validateMapPack } from './core/maps/registry';
 import type { MapPackDefinition } from './core/maps/types';
 import { createGame } from './core/setup';
 import { Terrain } from './core/terrain';
-import { unitRegistry, type UnitDefinition } from './core/units';
+import { unitCost, unitRegistry, type UnitDefinition } from './core/units';
 import { Lobby } from './net/lobby';
 import { Lockstep, type PlayerCommand } from './net/lockstep';
 import { localTransport, trysteroTransport, type Transport } from './net/transport';
 import { loadTerrain } from './osm/terrain';
+import { flagElement, flagImage } from './render/flag';
 import { drawLabels, factionIcon, formatTroops } from './render/labels';
-import { drawOverlay } from './render/overlay';
+import { drawOverlay, frontOf, type Ghost } from './render/overlay';
 import { factionColor, TerritoryPainter } from './render/territory';
 import './style.css';
+import { setCursor, type CursorKind } from './ui/cursors';
 import { exportPack, setupCustomMaps } from './ui/custom-maps';
+import { setupNationEditor } from './ui/nation-editor';
+import { Radial, type RadialItem, type RadialSpec } from './ui/radial';
 
 const BASEMAP_STYLE = 'https://tiles.openfreemap.org/styles/positron';
 const LAYER = 'territory';
@@ -34,15 +39,20 @@ const TREATY_LABEL: Record<Treaty, string> = { NonAggressionPact: 'Nichtangriffs
 /** Why an order was refused. */
 const REFUSAL: Record<Exclude<OrderResult, 'ok'>, string> = {
   gold: 'Nicht genug Gold.',
-  place: 'Hier kann nicht gebaut werden: nur auf eigenem Gebiet und mit Abstand zu anderen Gebäuden.',
+  place: 'Das geht nur auf deinem eigenen Gebiet.',
+  spacing: 'Zu nah am nächsten Gebäude.',
   coast: 'Dieses Gebäude muss direkt am Wasser stehen.',
   base: 'Dafür fehlt das passende Gebäude.',
   range: 'Außer Reichweite, oder es gibt keinen Seeweg dorthin.',
   target: 'Das ist kein gültiges Ziel.',
   troops: 'Dafür hast du keine Truppen übrig.',
 };
+/** The same reasons, short enough to hang on the cursor while placing a building. */
+const BUILD_HINT: Partial<Record<OrderResult, string>> = { place: 'Nicht dein Gebiet', spacing: 'Zu nah am nächsten Gebäude', coast: 'Kein Küstenfeld', gold: 'Zu wenig Gold' };
 /** Gold in one gift. */
 const GOLD_GIFT = 100;
+/** Units that get a key of their own (after the buildings) to aim them straight at the map. */
+const TARGET_HOTKEYS = ['Bomber', 'Missile'];
 
 interface Session {
   pack: MapPackDefinition;
@@ -54,7 +64,7 @@ interface Session {
   /** False while players are still picking their starting areas. */
   running: boolean;
   startedAt: number;
-  /** Cell the action panel is open for, or -1. */
+  /** Cell the context menu is open for, or -1. */
   selected: number;
   /** Factions the player is known to be at war with, to announce new wars once. */
   wars: Set<number>;
@@ -142,8 +152,12 @@ function showMenu(): void {
   if (map.getSource(LAYER)) map.removeSource(LAYER);
   hud.hidden = true;
   $('hover').textContent = ' ';
-  $('action').hidden = true;
   $('offers').hidden = true;
+  $('hotbar').hidden = true;
+  $('alarms').replaceChildren();
+  alarmButtons.clear();
+  radial.close();
+  setMode(null);
   labels.canvas.width = 0; // clears the labels; drawLabels resizes it again
   showBanner('');
   status.textContent = '';
@@ -191,12 +205,12 @@ async function begin(pack: MapPackDefinition, terrain: Uint8Array, seed: number,
   );
   map.setMinZoom(pack.zoom.min);
   map.setMaxZoom(pack.zoom.max);
-  map.fitBounds([west, south, east, north], { padding: 20, duration: 0 });
+  // Room at the bottom for the hotkey bar.
+  map.fitBounds([west, south, east, north], { padding: { top: 20, left: 20, right: 20, bottom: 90 }, duration: 0 });
 
   busy = false;
   menu.hidden = true;
   hud.hidden = false;
-  $('action').hidden = true;
   dirty = true;
 }
 
@@ -241,11 +255,28 @@ function addMapButton(pack: MapPackDefinition): void {
 for (const pack of mapRegistry.list()) addMapButton(pack);
 setupCustomMaps(map, addMapButton, (text) => (status.textContent = text), (visible) => (menu.hidden = !visible));
 
+/** The player's own nation, as made in the editor. It goes out with the spawn command and to the room. */
+let nation = setupNationEditor($<HTMLFormElement>('nation-form'), (edited) => {
+  nation = edited;
+  lobby?.present(edited);
+});
+
 $('to-menu').addEventListener('click', showMenu);
 $('export-map').addEventListener('click', () => {
   if (session) exportPack(session.pack, session.game.terrain, session.proj.width, session.proj.height);
 });
-strength.addEventListener('input', () => ($('strength-value').textContent = `${strength.value} %`));
+// One troop share, two sliders: the one in the HUD and the one on the context menu.
+const share = $<HTMLInputElement>('share');
+for (const [from, to] of [
+  [strength, share],
+  [share, strength],
+]) {
+  from.addEventListener('input', () => {
+    to.value = from.value;
+    $('strength-value').textContent = $('share-value').textContent = `${from.value} %`;
+    radial.refresh();
+  });
+}
 
 // --- multiplayer lobby -----------------------------------------------------------
 
@@ -258,8 +289,12 @@ function renderLobby(): void {
   $('lobby-on').hidden = room === null;
   if (!lobby) return;
   const host = lobby.hostId;
-  const row = (name: string, id: string) => Object.assign(document.createElement('li'), { textContent: `${name}${id === host ? ' (Host)' : ''}${id === lobby!.net.selfId ? ' – du' : ''}` });
-  $('players').replaceChildren(row(lobby.name, lobby.net.selfId), ...[...lobby.roster].map(([id, p]) => row(p.name, id)));
+  const row = (n: NationProfile, id: string) => {
+    const li = document.createElement('li');
+    li.append(flagElement(n.flag), `${n.ruler} von ${n.name}${id === host ? ' (Host)' : ''}${id === lobby!.net.selfId ? ' – du' : ''}`);
+    return li;
+  };
+  $('players').replaceChildren(row(lobby.nation, lobby.net.selfId), ...[...lobby.roster].map(([id, p]) => row(p.nation, id)));
   const relays = lobby.net.relays?.();
   const reach = !relays ? '' : relays.open > 0 ? ` (${relays.open} von ${relays.total} Relays erreichbar)` : ' Kein Relay ist erreichbar: andere Spieler finden diesen Raum gerade nicht.';
   $('lobby-status').textContent =
@@ -278,8 +313,6 @@ function renderLobby(): void {
 async function enterRoom(id: string): Promise<void> {
   room = id;
   $<HTMLInputElement>('room-link').value = location.href;
-  const name = $<HTMLInputElement>('player-name');
-  name.value = localStorage.getItem('osm-front:name') ?? 'Spieler';
   $('lobby-status').textContent = 'Verbinde …';
   renderLobby();
   refreshMapButtons();
@@ -292,7 +325,7 @@ async function enterRoom(id: string): Promise<void> {
     $('lobby-status').textContent = 'Die Verbindung zum Raum ist fehlgeschlagen.';
     return;
   }
-  lobby = new Lobby(net, sessionStorage.getItem(hostKey(id)) === '1', name.value);
+  lobby = new Lobby(net, sessionStorage.getItem(hostKey(id)) === '1', nation);
   lobby.onChange = renderLobby;
   // The host's game arrives as the map and the seed, followed by its terrain grid.
   let announced: { pack: MapPackDefinition; seed: number } | null = null;
@@ -339,11 +372,6 @@ $('room-leave').addEventListener('click', () => {
   lobby?.net.leave();
   location.href = location.pathname + location.search;
 });
-$<HTMLInputElement>('player-name').addEventListener('change', (e) => {
-  const value = (e.target as HTMLInputElement).value;
-  localStorage.setItem('osm-front:name', value);
-  lobby?.rename(value);
-});
 // Another room in the address bar is another session.
 addEventListener('hashchange', () => {
   if (roomOf() !== room) location.reload();
@@ -355,11 +383,145 @@ setInterval(() => {
   if (lobby && !menu.hidden) renderLobby();
 }, 3000);
 
-// --- player input --------------------------------------------------------------
+// --- player input: modes, preview and pointer -----------------------------------
+
+/** What the next click on the map does instead of opening the context menu. */
+type Mode = { kind: 'build'; def: BuildingDefinition } | { kind: 'target'; unit: UnitDefinition } | null;
+let mode: Mode = null;
+/** Cell under the mouse, or -1. */
+let hoverCell = -1;
+let ghost: Ghost | null = null;
+const refusal = (result: CommandResult) => (result === 'ok' || result === 'pending' || result === 'refused' ? 'Das geht gerade nicht.' : REFUSAL[result]);
+const distance = (game: Game, a: number, b: number) => Math.max(Math.abs((a % game.width) - (b % game.width)), Math.abs(Math.floor(a / game.width) - Math.floor(b / game.width)));
+const basesFor = (game: Game, owner: number, unit: UnitDefinition) => game.buildings.filter((b) => b.owner === owner && b.def.id === unit.base);
+
+/** Why this unit cannot be sent at this cell right now ('' if it can). Sea routes are only known once ordered. */
+function launchProblem(game: Game, mine: Faction, unit: UnitDefinition, cell: number): string {
+  const bases = basesFor(game, mine.id, unit);
+  if (bases.length === 0) return `Braucht ${buildingRegistry.get(unit.base)?.name}`;
+  if (unit.domain !== 'sea') {
+    if (game.terrain[cell] === Terrain.WATER || game.owner[cell] === mine.id) return 'Kein gültiges Ziel';
+    if (!bases.some((b) => distance(game, b.cell, cell) <= unit.range)) return 'Außer Reichweite';
+  }
+  return mine.gold < unitCost(game, mine.id, unit) ? 'Zu wenig Gold' : '';
+}
+
+/** The preview that follows the mouse in build or target mode: what, how far it reaches, and whether it works here. */
+function updateGhost(): void {
+  const mine = me();
+  ghost = null;
+  if (!session || !mine?.alive || !mode || hoverCell < 0) return;
+  const { game } = session;
+  if (mode.kind === 'target') {
+    const hint = launchProblem(game, mine, mode.unit, hoverCell);
+    ghost = { cell: hoverCell, icon: mode.unit.icon, ok: !hint, hint, rings: mode.unit.blast ? [{ radius: mode.unit.blast.radius, label: 'Wirkungsradius' }] : [], links: [] };
+    return;
+  }
+  const def = mode.def;
+  const result = canBuild(game, mine.id, def.id, hoverCell);
+  const rings: Ghost['rings'] = [];
+  if (def.fort) rings.push({ radius: def.fort.radius, label: `Verteidigung +${def.fort.defensePct} %` });
+  if (def.intercept) rings.push({ radius: def.intercept.radius, label: 'Abfangradius' });
+  // What the units based here would cover.
+  for (const u of unitRegistry.list()) {
+    if (u.base !== def.id) continue;
+    if (u.intercept) rings.push({ radius: u.intercept.radius, label: `${u.name}: Abfangradius` });
+    else if (u.domain !== 'sea') rings.push({ radius: u.range, label: `${u.name}: Reichweite` });
+  }
+  let hint = result === 'ok' ? '' : (BUILD_HINT[result] ?? 'Hier nicht möglich');
+  const links: number[] = [];
+  if (def.income && def.linkBonusPct && game.owner[hoverCell] === mine.id) {
+    const city = linkedCity(game, mine.id, hoverCell);
+    if (city >= 0) links.push(city);
+    if (result === 'ok') hint = city >= 0 ? `Anschluss an eine Stadt: +${def.linkBonusPct} %` : 'Ohne Straßen-/Schienenanschluss';
+  }
+  ghost = { cell: hoverCell, icon: def.icon, ok: result === 'ok', hint, rings, links };
+}
+
+const canvasEl = map.getCanvas();
+function updateCursor(): void {
+  let kind: CursorKind = 'default';
+  const mine = me();
+  if (session && mine?.alive) {
+    const { game } = session;
+    const owner = hoverCell < 0 ? mine.id : game.owner[hoverCell];
+    if (mode) kind = mode.kind;
+    else if (owner !== NEUTRAL && owner !== mine.id && mine.neighbors.includes(owner)) kind = 'attack';
+    else if (owner !== mine.id && game.terrain[hoverCell] !== Terrain.WATER && game.touchesWater(hoverCell) && game.buildings.some((b) => b.owner === mine.id && b.def.coastal)) kind = 'landing';
+  }
+  setCursor(canvasEl, kind);
+}
+
+function setMode(next: Mode): void {
+  mode = next;
+  if (next) radial.close();
+  refreshHotbar();
+  updateGhost();
+  updateCursor();
+}
+
+// --- hotkey bar -------------------------------------------------------------------
+
+interface Slot {
+  key: string;
+  mode: NonNullable<Mode>;
+  button: HTMLButtonElement;
+  price: HTMLElement;
+}
+const slots: Slot[] = [];
+{
+  const add = (key: number, slotMode: NonNullable<Mode>, icon: string, name: string) => {
+    const button = Object.assign(document.createElement('button'), { type: 'button', title: name });
+    const price = document.createElement('small');
+    button.append(Object.assign(document.createElement('kbd'), { textContent: `${key}` }), Object.assign(document.createElement('b'), { textContent: icon }), price);
+    button.setAttribute('aria-label', `${name} (Taste ${key})`);
+    const slot: Slot = { key: `${key}`, mode: slotMode, button, price };
+    button.addEventListener('click', () => toggleSlot(slot));
+    slots.push(slot);
+    return button;
+  };
+  const buildings = buildingRegistry.list().slice(0, 7);
+  const units = TARGET_HOTKEYS.map((id) => unitRegistry.get(id)!);
+  $('hotbar').append(
+    ...buildings.map((def, i) => add(i + 1, { kind: 'build', def }, def.icon, def.name)),
+    Object.assign(document.createElement('span'), { className: 'gap' }),
+    ...units.map((unit, i) => add(buildings.length + 1 + i, { kind: 'target', unit }, unit.icon, unit.name)),
+  );
+}
+const sameMode = (a: Mode, b: Mode) => a !== null && b !== null && (a.kind === 'build' ? b.kind === 'build' && a.def === b.def : b.kind === 'target' && a.unit === b.unit);
+const toggleSlot = (slot: Slot) => setMode(sameMode(mode, slot.mode) ? null : slot.mode);
+
+function refreshHotbar(): void {
+  const mine = me();
+  $('hotbar').hidden = !session || !mine?.alive;
+  if (!session || !mine) return;
+  for (const slot of slots) {
+    const cost = slot.mode.kind === 'build' ? price(session.game, mine.id, slot.mode.def) : unitCost(session.game, mine.id, slot.mode.unit);
+    const text = `${Math.ceil(cost)}`;
+    if (slot.price.textContent !== text) slot.price.textContent = text;
+    slot.button.classList.toggle('poor', mine.gold < cost);
+    slot.button.setAttribute('aria-pressed', `${sameMode(mode, slot.mode)}`);
+  }
+}
+
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') setMode(null);
+  if (!session || !me()?.alive || !menu.hidden || e.ctrlKey || e.metaKey || e.altKey || (e.target as HTMLElement).closest?.('input, select, textarea')) return;
+  const slot = slots.find((s) => s.key === e.key);
+  if (slot) toggleSlot(slot);
+});
+// Right click leaves build and target mode.
+map.on('contextmenu', (e) => {
+  if (!mode) return;
+  e.originalEvent.preventDefault();
+  setMode(null);
+});
+
+// --- clicks ------------------------------------------------------------------------
 
 let spawning = false;
 map.on('click', (e) => {
-  if (!session) return;
+  if (!session || radial.justDismissed) return;
   const { game, proj } = session;
   const { lng, lat } = e.lngLat.wrap();
   const cell = proj.cellAt(lng, lat);
@@ -369,19 +531,27 @@ map.on('click', (e) => {
   if (!mine) {
     if (spawning) return;
     spawning = true;
-    order({ type: 'spawn', cell, name: lobby?.name ?? 'Du' }, (result) => {
+    order({ type: 'spawn', cell, nation }, (result) => {
       spawning = false;
       return result === 'ok' ? 'Klicke auf angrenzendes Land, um es anzugreifen.' : 'Hier ist kein freies Land für ein Startgebiet.';
     });
     return;
   }
   if (!mine.alive) return;
-  // Free land next door is simply taken; everything else is a choice, so the panel opens.
+  if (mode?.kind === 'build') {
+    const def = mode.def;
+    return order({ type: 'build', def: def.id, cell }, (result) => (result === 'ok' ? `${def.name} gebaut.` : refusal(result)));
+  }
+  if (mode?.kind === 'target') {
+    const unit = mode.unit;
+    return order({ type: 'launch', unit: unit.id, cell, percent: Number(strength.value) }, (result) => (result === 'ok' ? `${unit.name}: Befehl erteilt.` : refusal(result)));
+  }
+  // Free land next door is simply taken; everything else is a choice, so the menu opens at the click.
   if (game.isFreeLand(cell)) {
     const percent = Number(strength.value);
     order({ type: 'attack', target: NEUTRAL, percent }, (result) => (result === 'ok' ? `Vorstoß in freies Land mit ${percent} % deiner Truppen.` : ''));
   }
-  openActions(cell);
+  openMenu(cell, e.point.x, e.point.y);
 });
 
 map.on('mousemove', (e) => {
@@ -389,86 +559,141 @@ map.on('mousemove', (e) => {
   const { game, proj } = session;
   const { lng, lat } = e.lngLat.wrap();
   const cell = proj.cellAt(lng, lat);
+  if (cell !== hoverCell) {
+    hoverCell = cell;
+    updateGhost();
+    updateCursor();
+  }
   const hover = $('hover');
-  if (cell < 0) hover.textContent = ' ';
+  if (cell < 0) hover.textContent = ' ';
   else {
     const f = game.factions[game.owner[cell]];
-    const who = f.id === NEUTRAL ? (game.terrain[cell] === Terrain.WATER ? '' : 'Freies Land · ') : `${factionIcon(f)} ${f.name} (${kindLabel(f)}) · ${formatTroops(f.troops)} Truppen · `;
+    const who = f.id === NEUTRAL ? (game.terrain[cell] === Terrain.WATER ? '' : 'Freies Land · ') : `${f.nation ? `${f.nation.ruler} von ${f.name}` : `${factionIcon(f)} ${f.name}`} (${kindLabel(f)}) · ${formatTroops(f.troops)} Truppen · `;
     const b = game.buildingAt.get(cell);
     hover.textContent = `${who}${TERRAIN_LABEL[game.terrain[cell]]}${b ? ` · ${b.def.icon} ${b.def.name}` : ''}${game.fallout[cell] > game.tick ? ' · verstrahlt' : ''}`;
   }
 });
+map.on('mouseout', () => {
+  hoverCell = -1;
+  updateGhost();
+});
 
-// --- action panel: build menu, target selection, diplomacy ----------------------
+// --- context menu at the click: build wheel, target selection, diplomacy -------------
 
-interface Action {
-  /** Re-read on every refresh: prices, the slider and treaties change while the panel is open. */
-  label: () => string;
-  enabled?: () => boolean;
-  /** Sends the order off; the outcome is reported once it has been executed. */
-  run: () => void;
-}
-let liveActions: { button: HTMLButtonElement; action: Action }[] = [];
-let actionInfo: () => string = () => '';
-/** Owner of the selected cell when the panel was built; a change rebuilds it. */
-let actionOwner = -1;
-const refusal = (result: CommandResult) => (result === 'ok' || result === 'pending' || result === 'refused' ? 'Das geht gerade nicht.' : REFUSAL[result]);
-
-function closeActions(): void {
-  $('action').hidden = true;
+const radial = new Radial($('radial'));
+radial.onClose = () => {
   if (session) session.selected = -1;
-}
+};
+map.on('movestart', () => radial.close());
+/** Owner of the cell the menu was opened for; when the cell changes hands the menu is stale. */
+let menuOwner = -1;
 
-function openActions(cell: number): void {
+function openMenu(cell: number, x: number, y: number): void {
   const s = session;
-  const me = s?.lockstep.me;
-  if (!s || !me) return;
+  const mine = s?.lockstep.me;
+  if (!s || !mine) return;
   const { game } = s;
   const d = game.diplo;
   const owner = game.owner[cell];
   const water = game.terrain[cell] === Terrain.WATER;
   const f = game.factions[owner];
   const percent = () => Number(strength.value);
-  const hasBase = (id: string) => game.buildings.some((b) => b.owner === me.id && b.def.id === id);
+  const gold = (cost: number) => `${Math.ceil(cost)} Gold`;
 
-  const unitAction = (def: UnitDefinition): Action => ({
-    label: () => `${def.name} · ${def.cost} Gold${def.carriesTroops ? ` · ${percent()} % Truppen` : ''}${hasBase(def.base) ? '' : ` (braucht ${buildingRegistry.get(def.base)?.name})`}`,
-    enabled: () => me.gold >= def.cost && hasBase(def.base),
+  const unitItem = (unit: UnitDefinition): RadialItem => ({
+    icon: unit.icon,
+    label: unit.name,
+    hint: () => [gold(unitCost(game, mine.id, unit)), unit.carriesTroops ? `${percent()} % Truppen` : '', launchProblem(game, mine, unit, cell)].filter(Boolean).join(' · '),
+    enabled: () => !launchProblem(game, mine, unit, cell),
     run: () =>
-      order({ type: 'launch', unit: def.id, cell, percent: percent() }, (result) => {
-        if (result === 'range' && def.trade) return 'Kein fremder Hafen ist über See erreichbar.';
-        return result === 'ok' ? `${def.name}: Befehl erteilt.` : refusal(result);
+      order({ type: 'launch', unit: unit.id, cell, percent: percent() }, (result) => {
+        if (result === 'range' && unit.trade) return 'Kein fremder Hafen ist über See erreichbar.';
+        return result === 'ok' ? `${unit.name}: Befehl erteilt.` : refusal(result);
       }),
   });
-  const treaty = (kind: Treaty): Action => ({
-    label: () => `${TREATY_LABEL[kind]} anbieten`,
-    enabled: () => f.alive && (kind === 'TradeAgreement' ? !d.trading(me.id, owner) && !d.embargoed(me.id, owner) : d.status(game, me.id, owner) !== kind),
-    run: () =>
-      order({ type: 'propose', to: owner, treaty: kind }, (result) =>
-        result === 'ok' ? `${f.name} nimmt an: ${TREATY_LABEL[kind]}.` : result === 'pending' ? `Angebot an ${f.name} gesendet: ${TREATY_LABEL[kind]}.` : `${f.name} lehnt ab.`,
-      ),
-  });
 
-  const groups: [title: string, actions: Action[]][] = [];
-  let title = 'Dein Gebiet';
-  actionInfo = () => `${TERRAIN_LABEL[game.terrain[cell]]}${game.touchesWater(cell) ? ' · Küste' : ''}`;
-  if (owner === me.id) {
-    groups.push([
-      'Bauen',
-      buildingRegistry.list().map((def) => ({
-        label: () => `${def.icon} ${def.name} · ${price(game, me.id, def)} Gold`,
-        enabled: () => me.gold >= price(game, me.id, def),
-        run: () => order({ type: 'build', def: def.id, cell }, (result) => (result === 'ok' ? `${def.name} gebaut.` : refusal(result))),
-      })),
-    ]);
-    // Units that need no target: they stay at their base or find their own route.
-    groups.push(['Stationieren', unitRegistry.list().filter((u) => u.intercept || u.trade).map(unitAction)]);
+  let spec: RadialSpec;
+  if (owner === mine.id) {
+    spec = {
+      title: 'Dein Gebiet',
+      info: () => `${TERRAIN_LABEL[game.terrain[cell]]}${game.touchesWater(cell) ? ' · Küste' : ''}`,
+      items: [
+        ...buildingRegistry.list().map((def): RadialItem => {
+          const problem = () => canBuild(game, mine.id, def.id, cell);
+          return {
+            icon: def.icon,
+            label: def.name,
+            hint: () => [gold(price(game, mine.id, def)), problem() === 'ok' ? '' : BUILD_HINT[problem()]].filter(Boolean).join(' · '),
+            enabled: () => problem() === 'ok',
+            run: () => order({ type: 'build', def: def.id, cell }, (result) => (result === 'ok' ? `${def.name} gebaut.` : refusal(result))),
+          };
+        }),
+        {
+          icon: '⚑',
+          label: 'Sammelpunkt',
+          hint: () => 'Truppen sammeln: +50 % Verteidigung im Umkreis',
+          run: () => order({ type: 'rally', cell }, (result) => (result === 'ok' ? 'Sammelpunkt gesetzt.' : refusal(result))),
+        },
+        // Units that need no target: they stay at their base or find their own route.
+        ...unitRegistry.list().filter((u) => u.intercept || u.trade).map(unitItem),
+      ],
+    };
   } else {
-    title = water ? 'Gewässer' : owner === NEUTRAL ? 'Freies Land' : `${factionIcon(f)} ${f.name}`;
-    const military: Action[] = [];
+    const diplomacy = (): RadialSpec => {
+      const treaty = (kind: Treaty, icon: string): RadialItem => ({
+        icon,
+        label: `${TREATY_LABEL[kind]} anbieten`,
+        enabled: () => f.alive && (kind === 'TradeAgreement' ? !d.trading(mine.id, owner) && !d.embargoed(mine.id, owner) : d.status(game, mine.id, owner) !== kind),
+        run: () =>
+          order({ type: 'propose', to: owner, treaty: kind }, (result) =>
+            result === 'ok' ? `${f.name} nimmt an: ${TREATY_LABEL[kind]}.` : result === 'pending' ? `Angebot an ${f.name} gesendet: ${TREATY_LABEL[kind]}.` : `${f.name} lehnt ab.`,
+          ),
+      });
+      return {
+        title: f.name,
+        image: f.nation ? flagImage(f.nation.flag).url : undefined,
+        slider: true,
+        info: () => {
+          const pact = d.pactLeft(game, mine.id, owner);
+          const extras = [pact > 0 ? `noch ${Math.ceil(pact / TICKS_PER_SECOND)} s` : '', d.trading(mine.id, owner) ? 'Handel' : '', d.embargoed(mine.id, owner) ? 'Embargo' : ''].filter(Boolean);
+          return `Beziehung ${d.relation(mine.id, owner)}\n${STATUS_LABEL[d.status(game, mine.id, owner)]}${extras.length ? ` (${extras.join(', ')})` : ''}`;
+        },
+        items: [
+          treaty('NonAggressionPact', '☮'),
+          treaty('Alliance', '♥'),
+          treaty('TradeAgreement', '⚖'),
+          {
+            icon: '¤',
+            label: `${GOLD_GIFT} Gold senden`,
+            enabled: () => f.alive && mine.gold >= GOLD_GIFT,
+            run: () => order({ type: 'aid', to: owner, gold: GOLD_GIFT, troopsPct: 0 }, (result) => (result === 'ok' ? `${GOLD_GIFT} Gold an ${f.name} gesendet.` : refusal(result))),
+          },
+          {
+            icon: '♟',
+            label: 'Truppen senden',
+            hint: () => `${percent()} % deiner Truppen`,
+            enabled: () => f.alive,
+            run: () => order({ type: 'aid', to: owner, gold: 0, troopsPct: percent() }, (result) => (result === 'ok' ? `Truppen an ${f.name} gesendet.` : refusal(result))),
+          },
+          {
+            icon: '✖',
+            label: d.embargoed(mine.id, owner) ? 'Embargo aufheben' : 'Embargo verhängen',
+            run: () => {
+              const on = !d.embargoed(mine.id, owner);
+              order({ type: 'embargo', to: owner, on }, () => (on ? `Embargo gegen ${f.name}: der Handel ruht.` : `Embargo gegen ${f.name} aufgehoben.`));
+            },
+          },
+          { icon: '↩', label: 'Zurück', stays: true, run: () => radial.open(x, y, spec) },
+        ],
+      };
+    };
+    const items: RadialItem[] = [];
     if (!water) {
-      military.push({
-        label: () => `Bodenangriff · ${percent()} % Truppen${d.allied(me.id, owner) ? ' – bricht das Bündnis!' : ''}`,
+      items.push({
+        icon: '⚔',
+        label: 'Bodenangriff',
+        hint: () => (d.allied(mine.id, owner) ? 'Bricht das Bündnis!' : `${percent()} % Truppen`),
+        enabled: () => (owner === NEUTRAL ? mine.bordersNeutral : mine.neighbors.includes(owner)),
         run: () => {
           const sent = percent();
           order({ type: 'attack', target: owner, percent: sent }, (result) =>
@@ -477,86 +702,89 @@ function openActions(cell: number): void {
         },
       });
     }
-    // Open water is only a destination for ships that patrol.
-    for (const def of unitRegistry.list()) if (!def.intercept && !def.trade && (!water || def.guns)) military.push(unitAction(def));
-    groups.push(['Militär', military]);
-    if (owner !== NEUTRAL) {
-      actionInfo = () => {
-        const pact = d.pactLeft(game, me.id, owner);
-        const extras = [pact > 0 ? `noch ${Math.ceil(pact / TICKS_PER_SECOND)} s` : '', d.trading(me.id, owner) ? 'Handel' : '', d.embargoed(me.id, owner) ? 'Embargo' : ''].filter(Boolean);
-        return `${kindLabel(f)} · ${formatTroops(f.troops)} Truppen\nBeziehung ${d.relation(me.id, owner)} · ${STATUS_LABEL[d.status(game, me.id, owner)]}${extras.length ? ` (${extras.join(', ')})` : ''}`;
-      };
-      groups.push([
-        'Diplomatie',
-        [
-          treaty('NonAggressionPact'),
-          treaty('Alliance'),
-          treaty('TradeAgreement'),
-          {
-            label: () => `${GOLD_GIFT} Gold senden`,
-            enabled: () => f.alive && me.gold >= GOLD_GIFT,
-            run: () => order({ type: 'aid', to: owner, gold: GOLD_GIFT, troopsPct: 0 }, (result) => (result === 'ok' ? `${GOLD_GIFT} Gold an ${f.name} gesendet.` : refusal(result))),
-          },
-          {
-            label: () => `Truppen senden · ${percent()} %`,
-            enabled: () => f.alive,
-            run: () => order({ type: 'aid', to: owner, gold: 0, troopsPct: percent() }, (result) => (result === 'ok' ? `Truppen an ${f.name} gesendet.` : refusal(result))),
-          },
-          {
-            label: () => (d.embargoed(me.id, owner) ? 'Embargo aufheben' : 'Embargo verhängen'),
-            run: () => {
-              const on = !d.embargoed(me.id, owner);
-              order({ type: 'embargo', to: owner, on }, () => (on ? `Embargo gegen ${f.name}: der Handel ruht.` : `Embargo gegen ${f.name} aufgehoben.`));
-            },
-          },
-        ],
-      ]);
-    }
+    // Open water is a destination for ships only: a patrol, or an invasion of the nearest shore.
+    for (const unit of unitRegistry.list()) if (!unit.intercept && !unit.trade && (!water || unit.domain === 'sea')) items.push(unitItem(unit));
+    if (owner !== NEUTRAL) items.push({ icon: '✉', label: 'Diplomatie', hint: () => 'Handel, Bündnis, Hilfe', stays: true, run: () => radial.open(x, y, diplomacy()) });
+    spec = {
+      title: water ? 'Gewässer' : owner === NEUTRAL ? 'Freies Land' : f.name,
+      image: f.nation ? flagImage(f.nation.flag).url : undefined,
+      slider: true,
+      info: () => (owner === NEUTRAL ? TERRAIN_LABEL[game.terrain[cell]] : `${kindLabel(f)}\n${formatTroops(f.troops)} Truppen`),
+      items,
+    };
   }
-
+  radial.open(x, y, spec);
   s.selected = cell;
-  actionOwner = owner;
-  $('action-title').textContent = title;
-  liveActions = [];
-  $('action-groups').replaceChildren(
-    ...groups
-      .filter(([, actions]) => actions.length > 0)
-      .flatMap(([heading, actions]) => {
-        const box = document.createElement('div');
-        for (const action of actions) {
-          const button = Object.assign(document.createElement('button'), { type: 'button' });
-          button.addEventListener('click', action.run);
-          liveActions.push({ button, action });
-          box.append(button);
-        }
-        return [Object.assign(document.createElement('h2'), { textContent: heading }), box];
-      }),
-  );
-  $('action').hidden = false;
-  refreshActions();
+  menuOwner = owner;
 }
 
-/** Keeps labels and availability current without rebuilding the buttons under the player's cursor. */
-function refreshActions(): void {
-  const s = session;
-  const mine = me();
-  if (!s || !mine || s.selected < 0) return;
-  if (!mine.alive) return closeActions();
-  if (s.game.owner[s.selected] !== actionOwner) return openActions(s.selected);
-  const info = actionInfo();
-  if ($('action-info').textContent !== info) $('action-info').textContent = info;
-  for (const { button, action } of liveActions) {
-    const label = action.label();
-    if (button.textContent !== label) button.textContent = label;
-    button.disabled = action.enabled ? !action.enabled() : false;
+/** Keeps the open menu honest: availability changes with every tick, and a conquered cell needs another menu. */
+function refreshMenu(): void {
+  if (!session || !radial.isOpen) return;
+  if (!me()?.alive || session.game.owner[session.selected] !== menuOwner) radial.close();
+  else radial.refresh();
+}
+
+// --- alarms: who is coming for the player, and from where ---------------------------
+
+const alarmButtons = new Map<string, HTMLButtonElement>();
+const ARROWS = ['→', '↘', '↓', '↙', '←', '↖', '↑', '↗'];
+/** Alarms shown at once; more than that is noise. */
+const MAX_ALARMS = 4;
+
+function renderAlarms(game: Game, mine: Faction): void {
+  const threats: { key: string; text: string; cell: number }[] = [];
+  const name = (id: number) => game.factions[id].name.toUpperCase();
+  // Nothing threatens the fallen.
+  for (const atk of mine.alive ? game.attacks : []) {
+    if (atk.target !== mine.id) continue;
+    const { centre } = frontOf(game, atk);
+    if (centre >= 0) threats.push({ key: `attack${atk.attacker}`, cell: centre, text: `⚠ ANGRIFF von ${name(atk.attacker)} (${formatTroops(atk.troops)} Truppen)` });
+  }
+  for (const u of mine.alive ? game.units : []) {
+    if (u.targetOwner !== mine.id || u.owner === mine.id) continue;
+    const troops = `(${formatTroops(u.troops)} Truppen)`;
+    const text = u.def.blast
+      ? u.def.domain === 'missile'
+        ? `${u.def.blast.neutralize ? '☢ ATOMALARM!' : '➤ RAKETENALARM!'} ${u.def.name} von ${name(u.owner)}`
+        : `✹ LUFTANGRIFF von ${name(u.owner)}`
+      : u.def.carriesTroops
+        ? `${u.path ? '⚓ LANDUNG' : '☂ LUFTLANDUNG'} von ${name(u.owner)} ${troops}`
+        : `☸ KRIEGSSCHIFF von ${name(u.owner)}`;
+    threats.push({ key: `unit${u.id}`, cell: u.to, text });
+  }
+  threats.length = Math.min(threats.length, MAX_ALARMS);
+
+  const box = $('alarms');
+  const { clientWidth, clientHeight } = map.getContainer();
+  const seen = new Set<string>();
+  for (const t of threats) {
+    seen.add(t.key);
+    let button = alarmButtons.get(t.key);
+    if (!button) {
+      button = Object.assign(document.createElement('button'), { type: 'button' });
+      // The click jumps to wherever the threat is by then.
+      button.addEventListener('click', (e) => {
+        const cell = Number((e.currentTarget as HTMLElement).dataset.cell);
+        if (session) map.easeTo({ center: session.proj.lngLat((cell % game.width) + 0.5, Math.floor(cell / game.width) + 0.5), duration: 300 });
+      });
+      alarmButtons.set(t.key, button);
+      box.append(button);
+    }
+    // Which way to look: an arrow towards the threat, or a mark if it is already in view.
+    const p = map.project(session!.proj.lngLat((t.cell % game.width) + 0.5, Math.floor(t.cell / game.width) + 0.5));
+    const inView = p.x >= 0 && p.y >= 0 && p.x <= clientWidth && p.y <= clientHeight;
+    const arrow = inView ? '◎' : ARROWS[(Math.round(Math.atan2(p.y - clientHeight / 2, p.x - clientWidth / 2) / (Math.PI / 4)) + 8) % 8];
+    const text = `${t.text} ${arrow}`;
+    if (button.textContent !== text) button.textContent = text;
+    button.dataset.cell = `${t.cell}`;
+  }
+  for (const [key, button] of alarmButtons) {
+    if (seen.has(key)) continue;
+    button.remove();
+    alarmButtons.delete(key);
   }
 }
-
-$('action-close').addEventListener('click', closeActions);
-addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeActions();
-});
-strength.addEventListener('input', refreshActions);
 
 // --- HUD and game loop ---------------------------------------------------------
 
@@ -575,7 +803,7 @@ function renderOffers(game: Game, mine: Faction): void {
         order({ type: 'accept', from: o.from, treaty: o.treaty }, (result) => (result === 'ok' ? `${TREATY_LABEL[o.treaty]} mit ${from.name} geschlossen.` : 'Dieses Angebot gilt nicht mehr.')),
       );
       const row = document.createElement('div');
-      row.append(`${factionIcon(from)} ${from.name} bietet: ${TREATY_LABEL[o.treaty]}`, button);
+      row.append(from.nation ? flagElement(from.nation.flag) : factionIcon(from), ` ${from.name} bietet: ${TREATY_LABEL[o.treaty]}`, button);
       return row;
     }),
   );
@@ -615,18 +843,21 @@ function renderHud(): void {
       Object.assign(document.createElement('span'), { className: 'diplo', textContent: relations.length ? relations.map(([label, value]) => `${label}: ${value}`).join(' · ') : 'Keine Bündnisse, kein Krieg.' }),
     );
     renderOffers(game, mine);
+    renderAlarms(game, mine);
   } else stats.textContent = `${session.pack.name}: ${game.factions.filter((f) => f.alive).length} Fraktionen warten.`;
 
   const ranked = game.factions.filter((f) => f.alive).sort((a, b) => b.cells - a.cells || a.id - b.id);
+  // The top eight, and every player below them with their true rank.
   $('leaderboard').replaceChildren(
-    ...ranked.slice(0, 8).map((f) => {
-      const li = document.createElement('li');
+    ...ranked.flatMap((f, i) => {
+      if (i >= 8 && f.type !== 'HUMAN_NATION') return [];
+      const li = Object.assign(document.createElement('li'), { value: i + 1 });
       if (f === mine) li.className = 'me';
       const swatch = document.createElement('i');
-      swatch.style.background = `rgb(${factionColor(f, mine?.id).join(' ')})`;
-      const name = Object.assign(document.createElement('span'), { textContent: `${factionIcon(f)} ${f.name}` });
-      li.append(swatch, name, `${f.cells}`);
-      return li;
+      swatch.style.background = `rgb(${factionColor(f).join(' ')})`;
+      const name = Object.assign(document.createElement('span'), { textContent: f.nation ? f.name : `${factionIcon(f)} ${f.name}` });
+      li.append(swatch, ...(f.nation ? [flagElement(f.nation.flag)] : []), name, `${f.cells}`);
+      return [li];
     }),
   );
 
@@ -645,13 +876,16 @@ function renderHud(): void {
 }
 
 function repaint(s: Session): void {
-  s.painter.paint(s.game, me()?.id);
+  s.painter.paint(s.game);
   // A paused canvas source re-reads its canvas exactly once per play/pause pair.
   const source = map.getSource<CanvasSource>(LAYER);
   source?.play();
   source?.pause();
   renderHud();
-  refreshActions();
+  refreshMenu();
+  refreshHotbar();
+  updateGhost();
+  updateCursor();
 }
 
 const TICK_MS = 1000 / TICKS_PER_SECOND;
@@ -700,9 +934,9 @@ function frame(now: number): void {
     repaint(session);
   }
   drawLabels(labels, map, session.game, session.proj);
-  drawOverlay(labels, map, session.game, session.proj, session.selected, now, me()?.id);
+  drawOverlay(labels, map, session.game, session.proj, { me: me()?.id ?? -1, selected: session.selected, ghost }, now);
 }
 requestAnimationFrame(frame);
 
 // Handle for the browser console and automated browser tests.
-Object.assign(window, { osmFront: { map, mapRegistry, session: () => session && { ...session, me: me() }, lobby: () => lobby } });
+Object.assign(window, { osmFront: { map, mapRegistry, session: () => session && { ...session, me: me() }, lobby: () => lobby, mode: () => mode, ghost: () => ghost } });

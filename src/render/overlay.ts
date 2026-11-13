@@ -1,5 +1,5 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
-import type { Game, GameEvent } from '../core/game';
+import { NEUTRAL, RALLY_RADIUS, type Attack, type Game, type GameEvent } from '../core/game';
 import type { GridProjection } from '../core/maps/projection';
 import type { Unit } from '../core/units';
 import { formatTroops } from './labels';
@@ -25,20 +25,142 @@ const EFFECT_COLOR: Record<GameEvent['type'], string> = {
   repelled: '255 90 60',
 };
 
+/** What would be built or hit at the cursor: a preview that follows the mouse. */
+export interface Ghost {
+  cell: number;
+  icon: string;
+  /** Green if the order would go through, red if not - and why, as a short note at the cursor. */
+  ok: boolean;
+  hint: string;
+  /** Reach of the thing, in cells: defence, interception, weapon range, blast. */
+  rings: { radius: number; label: string }[];
+  /** Cells a connection runs to: the city a factory would be linked with. */
+  links: number[];
+}
+
+export interface View {
+  /** The local player's faction id, or -1. */
+  me: number;
+  /** Cell the context menu is open for, or -1. */
+  selected: number;
+  ghost: Ghost | null;
+}
+
+/** Front cells of one attack drawn at most; longer fronts are thinned out. */
+const FRONT_SAMPLES = 500;
+
+/** The cells an attack is about to take (thinned out), and the cell at their centre (-1 if there are none). */
+export function frontOf(game: Game, atk: Attack): { cells: number[]; centre: number } {
+  const stride = Math.max(1, Math.ceil(atk.pending / FRONT_SAMPLES));
+  const cells: number[] = [];
+  let sx = 0;
+  let sy = 0;
+  let i = 0;
+  for (const bucket of atk.buckets) {
+    for (const cell of bucket) {
+      if (i++ % stride || game.owner[cell] !== atk.target) continue;
+      cells.push(cell);
+      sx += cell % game.width;
+      sy += Math.floor(cell / game.width);
+    }
+  }
+  if (cells.length === 0) return { cells, centre: -1 };
+  // The front cell nearest to the mean: a point that really is on the front.
+  const mx = sx / cells.length;
+  const my = sy / cells.length;
+  let centre = cells[0];
+  let best = Infinity;
+  for (const cell of cells) {
+    const d = ((cell % game.width) - mx) ** 2 + (Math.floor(cell / game.width) - my) ** 2;
+    if (d < best) {
+      best = d;
+      centre = cell;
+    }
+  }
+  return { cells, centre };
+}
+
 /**
  * Draws everything that moves or stands on the map: building icons, ships,
- * aircraft and missiles with the route ahead of them, explosions and
- * interceptions, and the selected cell. Call after `drawLabels`, which
- * clears the canvas and sets its scale.
+ * aircraft and missiles with the route ahead of them, contested fronts,
+ * danger zones, explosions and interceptions, the rally point, the selected
+ * cell and the build preview. Call after `drawLabels`, which clears the
+ * canvas and sets its scale.
  */
-export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, game: Game, proj: GridProjection, selected: number, now: number, me = -1): void {
+export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, game: Game, proj: GridProjection, view: View, now: number): void {
+  const { me, selected, ghost } = view;
   const w = game.width;
   const { clientWidth, clientHeight } = ctx.canvas;
   const at = (x: number, y: number) => map.project(proj.lngLat(x + 0.5, y + 0.5));
   const ofCell = (cell: number) => at(cell % w, Math.floor(cell / w));
   const visible = (p: { x: number; y: number }, margin = 40) => p.x > -margin && p.y > -margin && p.x < clientWidth + margin && p.y < clientHeight + margin;
   const cellPx = (at(w, 0).x - at(0, 0).x) / w;
-  const rgb = (id: number) => factionColor(game.factions[id], me).join(' ');
+  const rgb = (id: number) => factionColor(game.factions[id]).join(' ');
+  const pulse = 0.5 + 0.5 * Math.sin(now / 160);
+  const ring = (p: { x: number; y: number }, r: number) => {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+  };
+  const caption = (text: string, x: number, y: number, color = '#fff', size = 12) => {
+    ctx.font = `600 ${size}px system-ui, sans-serif`;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgb(0 0 0 / 80%)';
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+  };
+
+  // Contested fronts the player is part of: the cells about to fall glow, with the forces at their centre.
+  if (me >= 0) {
+    for (const atk of game.attacks) {
+      if (atk.target === NEUTRAL || (atk.attacker !== me && atk.target !== me)) continue;
+      const front = frontOf(game, atk);
+      if (front.centre < 0) continue;
+      const size = Math.max(3, cellPx * 1.5);
+      ctx.beginPath();
+      for (const cell of front.cells) {
+        const p = ofCell(cell);
+        if (visible(p, 10)) ctx.rect(p.x - size / 2, p.y - size / 2, size, size);
+      }
+      ctx.save();
+      ctx.shadowColor = 'rgb(255 80 20)';
+      ctx.shadowBlur = 6 + 10 * pulse;
+      ctx.fillStyle = `rgb(255 ${110 + Math.round(70 * pulse)} 30 / ${0.55 + 0.4 * pulse})`;
+      ctx.fill();
+      ctx.restore();
+      const p = ofCell(front.centre);
+      if (visible(p)) caption(`⚔ ${formatTroops(atk.troops)} vs ${formatTroops(game.factions[atk.target].troops)}`, p.x, p.y - 14, atk.target === me ? '#ffb199' : '#ffe0a3', 13);
+    }
+  }
+
+  // Where a bomb or missile will come down: a blinking danger zone from the moment it is under way.
+  for (const u of game.units) {
+    if (!u.def.blast || u.path) continue;
+    const p = ofCell(u.to);
+    const r = Math.max(8, u.def.blast.radius * cellPx);
+    if (!visible(p, r)) continue;
+    ring(p, r);
+    ctx.fillStyle = `rgb(255 30 30 / ${0.1 + 0.25 * pulse})`;
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = `rgb(255 60 60 / ${0.5 + 0.5 * pulse})`;
+    ctx.stroke();
+  }
+
+  // The player's rally point and the land it stiffens.
+  const rally = me >= 0 ? game.factions[me].rally : -1;
+  if (rally >= 0 && game.owner[rally] === me) {
+    const p = ofCell(rally);
+    if (visible(p, 80)) {
+      ring(p, RALLY_RADIUS * cellPx);
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = 'rgb(255 255 255 / 70%)';
+      ctx.stroke();
+      ctx.setLineDash([]);
+      caption('⚑', p.x, p.y, '#fff', 18);
+    }
+  }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
@@ -150,5 +272,47 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, gam
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = '#fff';
     ctx.stroke();
+  }
+
+  if (ghost) {
+    const p = ofCell(ghost.cell);
+    const tone = ghost.ok ? '90 220 120' : '255 80 70';
+    for (const cell of ghost.links) {
+      const q = ofCell(cell);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(q.x, q.y);
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = `rgb(${tone} / 90%)`;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ring(q, 5);
+      ctx.fillStyle = `rgb(${tone})`;
+      ctx.fill();
+    }
+    for (const { radius, label } of ghost.rings) {
+      const r = radius * cellPx;
+      ring(p, r);
+      ctx.fillStyle = `rgb(${tone} / 10%)`;
+      ctx.fill();
+      ctx.setLineDash([6, 4]);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = `rgb(${tone} / 85%)`;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // The caption sits on the ring, or at the top of the screen if the ring leaves it.
+      caption(label, p.x, Math.max(14, p.y - r - 9), `rgb(${tone})`, 11);
+    }
+    ring(p, 15);
+    ctx.fillStyle = `rgb(${tone} / 35%)`;
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = `rgb(${tone})`;
+    ctx.stroke();
+    ctx.globalAlpha = 0.75;
+    caption(ghost.icon, p.x, p.y + 1, '#fff', 18);
+    ctx.globalAlpha = 1;
+    if (ghost.hint) caption(ghost.hint, p.x, p.y + 30, `rgb(${tone})`, 13);
   }
 }
