@@ -244,13 +244,13 @@ Die Lobby zeigt jeden Spieler mit Flagge, Herrscher- und Nationsnamen.
 | `src/net/` | `lockstep.ts` (Host-Tick), `transport.ts` (trystero / BroadcastChannel), `lobby.ts` (Raum, Host, Namen) |
 | `src/osm/` | Terrain-Ableitung aus OSM-Kacheln und aus PNG-Masken |
 | `src/render/` | Territory-Canvas, Labels, `flag.ts` (Flaggen), `overlay.ts` (Gebäude-Icons, Einheiten, Flugbahnen, Effekte, Fronten, Gefahrenzonen, Bau-Ghost) |
-| `src/ui/` | `nation-editor.ts`, `radial.ts` (Kontextmenü), `cursors.ts`, `custom-maps.ts` (Bounding-Box-Formular, JSON-Import/-Export) |
+| `src/ui/` | `nation-editor.ts`, `radial.ts` (Kontextmenü), `cursors.ts`, `sound.ts` (Web-Audio-Effekte), `custom-maps.ts` (Bounding-Box-Formular, JSON-Import/-Export) |
 | `src/main.ts` | Karte, Menü, Lobby, HUD, Radialmenü, Hotkeys, Alarme, Angebote, Eingaben, Spielschleife |
 | `.claude/commands/` | Projekt-Skills: `/verify` (Tests, Build, Browser, Doku, Commit) und `/add-content` (neue Gebäude/Einheiten/Karten) |
 
 Im Browser liegt unter `window.osmFront` ein Handle (`map`, `mapRegistry`, `session()`, `lobby()`) für Konsole und
 Browser-Tests. `session()` liefert u. a. `game`, `proj`, `pack`, `lockstep` und `me` (die eigene Fraktion);
-`mode()` und `ghost()` zeigen Bau-/Zielmodus und Vorschau.
+`mode()` und `ghost()` zeigen Bau-/Zielmodus und Vorschau, `sounds` listet die zuletzt ausgelösten Effekte.
 
 ## Vorgehensweise
 
@@ -296,7 +296,7 @@ Bekannte Grenzen nach Phase 2:
 - Bomber sind Einweg-Einsätze (Kosten pro Flug), Schiffe fahren 4-verbunden (eckige Routen), kein Umlauf bei ±180°.
 - Die KI baut Häfen an jedem Wasser, also auch an Binnenseen ohne Seeweg.
 - Das Biom-Modell kennt keinen Niederschlag: Steppen und trockene Binnenländer sind zu grün.
-- Balancing ist grob: große KI-Nationen wachsen sehr schnell (Feinschliff in Phase 5).
+- Balancing ist grob: große KI-Nationen wachsen sehr schnell (in Phase 5 durch Schwierigkeitsgrade entschärft).
 
 ### Phase 3 – Multiplayer & Custom Maps (abgeschlossen)
 
@@ -340,9 +340,29 @@ Bekannte Grenzen nach Phase 4:
 - Das Radialmenü erklärt seine Knöpfe beim Überfahren mit der Maus; auf Touch-Geräten ist das ungetestet.
 - Der Sammelpunkt ist eine reine Verteidigungshilfe; Truppen bewegen sich in diesem Spiel nicht einzeln.
 
-### Phase 5 – Audio & Feinschliff
+### Phase 5 – Audio & Feinschliff (abgeschlossen)
 
-- [ ] UI/UX-Polishing.
-- [ ] Sound-Effekte über die Web Audio API.
-- [ ] Performance-Optimierung.
-- [ ] Finales GitHub-Pages-Deployment.
+- [x] **Sound-Effekte über die Web Audio API** (`src/ui/sound.ts`): 14 synthetisierte Effekte ohne Audiodateien
+      – Befehle, Bauen, Angriff, Explosion, Atomschlag, Abfangen, Landung, Alarm, Angebot, Sieg, Niederlage.
+      Ereignisse im Bild sind laut, außerhalb leise; Lautstärke-Regler im HUD, `M` schaltet stumm.
+- [x] **Performance-Optimierung**, gemessen auf der größten Karte (Asien, 1,18 Mio. Zellen, spätes Spiel mit
+      über 600 Gebäuden): Overlay 9,2 → 1,3–2,0 ms pro Frame (Sprites statt Text, Projektion per Arithmetik,
+      Punkte statt Abzeichen bei weitem Zoom); Territorium 11,1 → 5,7 ms pro Tick, früh im Spiel 1,4 ms (nur das
+      geänderte Rechteck wird neu gemalt); Rangliste nur noch zweimal pro Sekunde.
+- [x] **UI/UX-Polishing:** Hilfe-Dialog (`H`, beim ersten Spiel automatisch), Spielende-Dialog mit Bilanz,
+      Schwierigkeitsgrade, Ladebalken, Spielzeit im HUD, ruhige Warnungen bei `prefers-reduced-motion`,
+      schmaleres HUD auf kleinen Bildschirmen.
+- [x] **Schwierigkeit** (`DIFFICULTY` in `src/core/game.ts`, Teil der Simulation, der Host gibt sie vor):
+      Leicht – KI wächst mit 70 %, 120 s Schonfrist; Normal – 100 %, 45 s; Schwer – 125 %, keine Schonfrist.
+      In der Schonfrist wählt die KI keinen Spieler als Beute, wehrt sich aber, wenn sie angegriffen wird.
+- [x] **Finales GitHub-Pages-Deployment** mit `README.md`, Seitenbeschreibung und Theme-Farbe.
+- [x] Geprüft mit 76 Vitest-Tests und im Browser: Effekte werden bei Bau, Befehl, Explosion und Niederlage
+      ausgelöst, Stummschaltung bleibt gespeichert, Hilfe und Spielende-Dialog erscheinen, zwei Tabs bleiben auch
+      auf „Schwer“ synchron.
+
+Bekannte Grenzen nach Phase 5:
+
+- Ob die Effekte gut klingen, hat niemand gehört: geprüft ist nur, dass sie ausgelöst werden.
+- 60 FPS auf echter Grafikhardware sind nicht gemessen; die Zahlen oben sind Rechenzeit im Hauptthread.
+- Touch-Bedienung ist ungetestet.
+- Das Balancing jenseits der drei Schwierigkeitsgrade ist nicht durch Spieltests abgestimmt.
