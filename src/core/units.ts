@@ -22,6 +22,8 @@ export interface UnitDefinition {
   id: string;
   /** Display name (German UI). */
   name: string;
+  /** One character for menus. */
+  icon: string;
   /** Gold per unit, sortie or shot. */
   cost: number;
   /** Id of the building it starts from. */
@@ -70,12 +72,12 @@ export interface Unit {
 export type UnitRegistry = Registry<UnitDefinition>;
 export const unitRegistry: UnitRegistry = new Registry<UnitDefinition>();
 
-unitRegistry.register({ id: 'TransportShip', name: 'Truppentransporter', cost: 60, base: 'Port', domain: 'sea', speed: 0.5, range: 400, hp: 2, carriesTroops: true });
-unitRegistry.register({ id: 'Warship', name: 'Kriegsschiff', cost: 250, base: 'Port', domain: 'sea', speed: 0.5, range: 400, hp: 4, guns: { radius: 7, cooldown: 15, troops: 40 } });
-unitRegistry.register({ id: 'TradeShip', name: 'Handelsschiff', cost: 150, base: 'Port', domain: 'sea', speed: 0.4, range: 400, hp: 1, trade: { gold: 20, perCell: 0.5 } });
+unitRegistry.register({ id: 'TransportShip', name: 'Truppentransporter', icon: '⛵', cost: 60, base: 'Port', domain: 'sea', speed: 0.5, range: 400, hp: 2, carriesTroops: true });
+unitRegistry.register({ id: 'Warship', name: 'Kriegsschiff', icon: '☸', cost: 250, base: 'Port', domain: 'sea', speed: 0.5, range: 400, hp: 4, guns: { radius: 7, cooldown: 15, troops: 40 } });
+unitRegistry.register({ id: 'TradeShip', name: 'Handelsschiff', icon: '⚖', cost: 150, base: 'Port', domain: 'sea', speed: 0.4, range: 400, hp: 1, trade: { gold: 20, perCell: 0.5 } });
 unitRegistry.register({
   id: 'Fighter',
-  name: 'Jäger',
+  name: 'Jäger', icon: '➹',
   cost: 200,
   base: 'Airfield',
   domain: 'air',
@@ -84,12 +86,12 @@ unitRegistry.register({
   hp: 1,
   intercept: { radius: 18, cooldown: 60, chancePct: 60, domains: ['air'] },
 });
-unitRegistry.register({ id: 'Bomber', name: 'Bomber', cost: 120, base: 'Airfield', domain: 'air', speed: 2, range: 160, hp: 1, blast: { radius: 3, buildingDamage: 2, troopsPct: 4 } });
-unitRegistry.register({ id: 'Paratrooper', name: 'Fallschirmjäger', cost: 100, base: 'Airfield', domain: 'air', speed: 2, range: 70, hp: 1, carriesTroops: true });
-unitRegistry.register({ id: 'Missile', name: 'Taktische Rakete', cost: 300, base: 'MissileSilo', domain: 'missile', speed: 5, range: 300, hp: 1, blast: { radius: 4, buildingDamage: 3, troopsPct: 8 } });
+unitRegistry.register({ id: 'Bomber', name: 'Bomber', icon: '✹', cost: 120, base: 'Airfield', domain: 'air', speed: 2, range: 160, hp: 1, blast: { radius: 3, buildingDamage: 2, troopsPct: 4 } });
+unitRegistry.register({ id: 'Paratrooper', name: 'Fallschirmjäger', icon: '☂', cost: 100, base: 'Airfield', domain: 'air', speed: 2, range: 70, hp: 1, carriesTroops: true });
+unitRegistry.register({ id: 'Missile', name: 'Taktische Rakete', icon: '➤', cost: 300, base: 'MissileSilo', domain: 'missile', speed: 5, range: 300, hp: 1, blast: { radius: 4, buildingDamage: 3, troopsPct: 8 } });
 unitRegistry.register({
   id: 'Nuke',
-  name: 'Atomrakete',
+  name: 'Atomrakete', icon: '☢',
   cost: 2500,
   base: 'MissileSilo',
   domain: 'missile',
@@ -154,6 +156,12 @@ const chebyshev = (g: Game, a: number, b: number) =>
 
 // --- orders ----------------------------------------------------------------
 
+/** What one unit of this type costs the faction: a naval doctrine makes ships cheaper. */
+export function unitCost(g: Game, factionId: number, def: UnitDefinition): number {
+  const discount = def.domain === 'sea' ? (g.factions[factionId]?.bonus.navalDiscountPct ?? 0) : 0;
+  return (def.cost * (100 - discount)) / 100;
+}
+
 /**
  * Buys one unit of type `unitId` and sends it at `target` from the nearest of
  * the faction's bases that can reach it. `percent` is the share of the
@@ -163,7 +171,8 @@ export function launch(g: Game, factionId: number, unitId: string, target: numbe
   const def = unitRegistry.get(unitId);
   const f = g.factions[factionId];
   if (!def || !f?.alive || target < 0 || target >= g.owner.length) return 'target';
-  if (f.gold < def.cost) return 'gold';
+  const cost = unitCost(g, factionId, def);
+  if (f.gold < cost) return 'gold';
   const bases = g.buildings.filter((b) => b.owner === factionId && b.def.id === def.base).sort((a, b) => chebyshev(g, a.cell, target) - chebyshev(g, b.cell, target) || a.id - b.id);
   if (bases.length === 0) return 'base';
 
@@ -171,7 +180,7 @@ export function launch(g: Game, factionId: number, unitId: string, target: numbe
     // Stationed at the base; several of them shorten its reload.
     bases[0].intercept = def.intercept;
     bases[0].interceptors++;
-    f.gold -= def.cost;
+    f.gold -= cost;
     return 'ok';
   }
 
@@ -224,7 +233,7 @@ export function launch(g: Game, factionId: number, unitId: string, target: numbe
     if (troops < 1) return 'troops';
     f.troops -= troops;
   }
-  f.gold -= def.cost;
+  f.gold -= cost;
   // A patrol in open water or a trade run threatens nobody; everything else aimed at a faction does.
   const targetOwner = def.trade ? 0 : g.owner[def.guns ? target : to];
   if (targetOwner && targetOwner !== factionId) g.diplo.hostile(g, factionId, targetOwner);

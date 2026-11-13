@@ -1,9 +1,11 @@
 import { execute, type Command, type CommandResult } from '../core/commands';
 import type { Faction } from '../core/faction';
 import type { Game } from '../core/game';
+import { sanitizeNation, type NationProfile } from '../core/nation';
 import type { Transport } from './transport';
 
-export type PlayerCommand = Command | { type: 'spawn'; cell: number; name: string };
+/** `spawn` founds the player's nation; its profile reaches every peer with the command. */
+export type PlayerCommand = Command | { type: 'spawn'; cell: number; nation: NationProfile };
 
 /**
  * One step of the shared timeline, decided by the host: the commands to
@@ -22,7 +24,6 @@ interface Turn {
 const HASH_EVERY = 50;
 /** Commands the host takes from one peer per turn; more than that is a flood. */
 const MAX_COMMANDS = 50;
-const MAX_NAME = 20;
 
 /**
  * Host-tick lockstep. Every peer runs the same deterministic game. Players
@@ -119,8 +120,9 @@ export class Lockstep {
     const id = this.players.get(peer);
     if (cmd.type !== 'spawn') return id === undefined ? 'refused' : execute(this.game, id, cmd);
     if (id !== undefined || !Number.isInteger(cmd.cell) || cmd.cell < 0 || cmd.cell >= this.game.owner.length) return 'refused';
-    const name = (typeof cmd.name === 'string' ? cmd.name.trim().slice(0, MAX_NAME) : '') || 'Spieler';
-    const f = this.game.addFaction({ name, type: 'HUMAN_NATION' }, cmd.cell, 2);
+    // The profile comes from the player's machine: it is cleaned up the same way on every peer.
+    const nation = sanitizeNation(cmd.nation);
+    const f = this.game.addFaction({ name: nation.name, type: 'HUMAN_NATION', nation }, cmd.cell, 2);
     if (!f) return 'target';
     this.players.set(peer, f.id);
     return 'ok';

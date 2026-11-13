@@ -1,3 +1,5 @@
+import type { Bonus, NationProfile } from './nation';
+
 export type FactionType = 'HUMAN_NATION' | 'AI_NATION' | 'AI_TRIBE';
 
 /** Every entity on the map: human players, AI nations and tribes. Index in `Game.factions` equals `id`. */
@@ -25,6 +27,12 @@ export interface Faction {
   enemy: number;
   /** A tribe under the protection of a trading nation defends a little better. */
   protected: boolean;
+  /** A player's self-made nation: name, colours, flag and doctrine. AI factions have none. */
+  nation: NationProfile | null;
+  /** The doctrine's bonuses (all zero without one). */
+  bonus: Bonus;
+  /** Cell of the troop rally point, or -1. Land around it is defended harder. */
+  rally: number;
   alive: boolean;
   /** AI personality, 0..100: how readily it starts wars. */
   aggression: number;
@@ -46,6 +54,7 @@ export interface FactionSpec {
   name: string;
   type: FactionType;
   elite?: boolean;
+  nation?: NationProfile;
 }
 
 interface Rules {

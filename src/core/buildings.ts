@@ -48,7 +48,7 @@ export interface Building {
   readyAt: number;
 }
 
-export type OrderResult = 'ok' | 'gold' | 'place' | 'coast' | 'base' | 'range' | 'target' | 'troops';
+export type OrderResult = 'ok' | 'gold' | 'place' | 'spacing' | 'coast' | 'base' | 'range' | 'target' | 'troops';
 
 export type BuildingRegistry = Registry<BuildingDefinition>;
 export const buildingRegistry: BuildingRegistry = new Registry<BuildingDefinition>();
@@ -79,11 +79,12 @@ const LINK_SEARCH = 3000;
 export function price(g: Game, factionId: number, def: BuildingDefinition): number {
   let owned = 0;
   for (const b of g.buildings) if (b.owner === factionId && b.def === def) owned++;
-  return (def.cost * (2 + owned)) / 2;
+  const discount = def.coastal ? (g.factions[factionId]?.bonus.navalDiscountPct ?? 0) : 0;
+  return (def.cost * (2 + owned) * (100 - discount)) / 200;
 }
 
-/** Puts up a building on one of the faction's own cells. */
-export function build(g: Game, factionId: number, defId: string, cell: number): OrderResult {
+/** Whether the faction could put this building on this cell right now, and if not, why not. Changes nothing. */
+export function canBuild(g: Game, factionId: number, defId: string, cell: number): OrderResult {
   const def = buildingRegistry.get(defId);
   const f = g.factions[factionId];
   if (!def || !f?.alive || g.owner[cell] !== factionId) return 'place';
@@ -91,16 +92,18 @@ export function build(g: Game, factionId: number, defId: string, cell: number): 
   const x = cell % w;
   const y = (cell - x) / w;
   for (const b of g.buildings) {
-    if (Math.abs((b.cell % w) - x) <= SPACING && Math.abs(Math.floor(b.cell / w) - y) <= SPACING) return 'place';
+    if (Math.abs((b.cell % w) - x) <= SPACING && Math.abs(Math.floor(b.cell / w) - y) <= SPACING) return 'spacing';
   }
-  if (def.coastal) {
-    let coast = false;
-    g.eachNeighbor(cell, (n) => (coast ||= g.terrain[n] === Terrain.WATER));
-    if (!coast) return 'coast';
-  }
-  const cost = price(g, factionId, def);
-  if (f.gold < cost) return 'gold';
-  f.gold -= cost;
+  if (def.coastal && !g.touchesWater(cell)) return 'coast';
+  return f.gold < price(g, factionId, def) ? 'gold' : 'ok';
+}
+
+/** Puts up a building on one of the faction's own cells. */
+export function build(g: Game, factionId: number, defId: string, cell: number): OrderResult {
+  const check = canBuild(g, factionId, defId, cell);
+  if (check !== 'ok') return check;
+  const def = buildingRegistry.get(defId)!;
+  g.factions[factionId].gold -= price(g, factionId, def);
   const b: Building = { id: g.nextId++, def, owner: factionId, cell, hp: def.hp, linked: false, intercept: def.intercept, interceptors: def.intercept ? 1 : 0, readyAt: 0 };
   g.buildings.push(b);
   g.buildingAt.set(cell, b);
@@ -114,11 +117,14 @@ export function damage(g: Game, b: Building, hits: number): void {
   if (b.hp <= 0) g.removeBuilding(b);
 }
 
-/** True if a road or rail in friendly hands leads from the factory to a friendly city. */
-function linkedToCity(g: Game, factory: Building): boolean {
-  const friendly = (owner: number) => owner === factory.owner || g.diplo.allied(owner, factory.owner);
+/**
+ * The cell of a friendly city that a road or rail in friendly hands leads to
+ * from `from`, or -1. This is what earns a factory there its link bonus.
+ */
+export function linkedCity(g: Game, owner: number, from: number): number {
+  const friendly = (o: number) => o === owner || g.diplo.allied(o, owner);
   const cities = g.buildings.filter((b) => b.def.capacity && friendly(b.owner));
-  if (cities.length === 0) return false;
+  if (cities.length === 0) return -1;
   const w = g.width;
   const road = (c: number) => (g.terrain[c] === Terrain.HIGHWAY || g.terrain[c] === Terrain.RAIL) && friendly(g.owner[c]);
   const near = (c: number, b: Building) => Math.abs((c % w) - (b.cell % w)) <= 2 && Math.abs(Math.floor(c / w) - Math.floor(b.cell / w)) <= 2;
@@ -126,8 +132,8 @@ function linkedToCity(g: Game, factory: Building): boolean {
   // Start on the road cells next to the factory, then follow the network.
   const seen = new Set<number>();
   const queue: number[] = [];
-  const fx = factory.cell % w;
-  const fy = Math.floor(factory.cell / w);
+  const fx = from % w;
+  const fy = Math.floor(from / w);
   for (let y = Math.max(0, fy - 2); y <= Math.min(g.height - 1, fy + 2); y++) {
     for (let x = Math.max(0, fx - 2); x <= Math.min(w - 1, fx + 2); x++) {
       if (road(y * w + x)) seen.add(queue[queue.length] = y * w + x);
@@ -135,12 +141,13 @@ function linkedToCity(g: Game, factory: Building): boolean {
   }
   for (let i = 0; i < queue.length && seen.size < LINK_SEARCH; i++) {
     const c = queue[i];
-    if (cities.some((b) => near(c, b))) return true;
+    const city = cities.find((b) => near(c, b));
+    if (city) return city.cell;
     g.eachNeighbor(c, (n) => {
       if (!seen.has(n) && road(n)) seen.add(queue[queue.length] = n);
     });
   }
-  return false;
+  return -1;
 }
 
 /**
@@ -171,8 +178,8 @@ export function refreshEconomy(g: Game): void {
     f.cityCapacity += d.capacity ?? 0;
     f.growthPct = Math.min(100, f.growthPct + (d.growthPct ?? 0));
     if (d.income) {
-      if (relink) b.linked = linkedToCity(g, b);
-      f.income += (d.income * (100 + (b.linked ? (d.linkBonusPct ?? 0) : 0))) / 100;
+      if (relink) b.linked = linkedCity(g, b.owner, b.cell) >= 0;
+      f.income += (d.income * (100 + (b.linked ? (d.linkBonusPct ?? 0) : 0)) * (100 + f.bonus.factoryIncomePct)) / 10000;
     }
     if (restamp && d.fort) {
       const r = d.fort.radius;

@@ -48,7 +48,7 @@ describe('construction', () => {
     expect(build(g, other.id, 'Port', at(g, 39, 15))).toBe('ok'); // on the shore
     expect(build(g, me.id, 'City', at(g, 20, 15))).toBe('ok');
     expect(me.gold).toBe(450);
-    expect(build(g, me.id, 'City', at(g, 21, 16))).toBe('place'); // too close to the first
+    expect(build(g, me.id, 'City', at(g, 21, 16))).toBe('spacing'); // too close to the first
     expect(price(g, me.id, city)).toBe(375);
     expect(build(g, me.id, 'City', at(g, 23, 15))).toBe('ok');
     expect(me.gold).toBe(75);

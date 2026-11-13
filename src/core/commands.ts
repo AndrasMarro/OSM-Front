@@ -15,7 +15,9 @@ export type Command =
   | { type: 'propose'; to: number; treaty: Treaty }
   | { type: 'accept'; from: number; treaty: Treaty }
   | { type: 'aid'; to: number; gold: number; troopsPct: number }
-  | { type: 'embargo'; to: number; on: boolean };
+  | { type: 'embargo'; to: number; on: boolean }
+  /** Moves the troop rally point to one of the faction's own cells; -1 dissolves it. */
+  | { type: 'rally'; cell: number };
 
 /** `pending`: the offer went to a player, who has yet to answer. `refused`: declined, or not a valid order. */
 export type CommandResult = OrderResult | 'pending' | 'refused';
@@ -58,6 +60,10 @@ export function execute(g: Game, factionId: number, cmd: Command): CommandResult
     case 'embargo':
       if (!int(cmd.to, 1, lastFaction) || cmd.to === factionId) return 'refused';
       d.setEmbargo(factionId, cmd.to, cmd.on === true);
+      return 'ok';
+    case 'rally':
+      if (!int(cmd.cell, -1, lastCell) || (cmd.cell >= 0 && g.owner[cmd.cell] !== factionId)) return 'place';
+      g.factions[factionId].rally = cmd.cell;
       return 'ok';
     default:
       return 'refused';

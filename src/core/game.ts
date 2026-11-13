@@ -2,6 +2,7 @@ import { decide } from './ai';
 import { refreshEconomy, type Building } from './buildings';
 import { Diplomacy, TRAITOR_DEFENSE_PCT } from './diplomacy';
 import { rulesOf, type Faction, type FactionSpec } from './faction';
+import { bonusOf } from './nation';
 import { mulberry32 } from './rng';
 import { CAPACITY, CONQUER_DELAY, DEFENSE_PCT, Terrain } from './terrain';
 import { stepUnits, type Unit } from './units';
@@ -17,6 +18,9 @@ export const NEUTRAL = 0;
 const RING = 32;
 const MAX_TERRAIN_DELAY = 12;
 const FALLOUT_DELAY = 6;
+/** Around its rally point (within this many cells) a faction's land costs attackers this much more. */
+export const RALLY_RADIUS = 8;
+const RALLY_DEFENSE_PCT = 50;
 /** A tribe that pays tribute to a nation defends this much better. */
 const PROTECTED_DEFENSE_PCT = 115;
 /** Events older than this many ticks are dropped. */
@@ -269,7 +273,7 @@ export class Game {
       f.gold += f.income;
       const max = this.maxTroops(f);
       // Logistic growth, fastest at half capacity, plus a base rate so a drained empire recovers.
-      if (f.troops < max) f.troops += ((max / 50 + (f.troops * (max - f.troops)) / max) * rulesOf(f).growth * (100 + f.growthPct)) / 100000;
+      if (f.troops < max) f.troops += ((max / 50 + (f.troops * (max - f.troops)) / max) * rulesOf(f).growth * (100 + f.growthPct + f.bonus.growthPct)) / 100000;
       // Each AI thinks every two seconds, staggered by id.
       if (f.type !== 'HUMAN_NATION' && (this.tick + f.id * 3) % (2 * TICKS_PER_SECOND) === 0) decide(this, f);
     }
@@ -306,6 +310,9 @@ export class Game {
       traitorUntil: 0,
       enemy: 0,
       protected: false,
+      nation: spec.nation ?? null,
+      bonus: bonusOf(spec.nation?.doctrine),
+      rally: -1,
       alive: true,
       aggression: spec.type === 'AI_NATION' ? 40 + Math.floor(this.rng() * 50) : 5,
       lastAttacker: 0,
@@ -423,7 +430,12 @@ export class Game {
     if (target !== NEUTRAL) {
       const def = this.factions[target];
       let pct = DEFENSE_PCT[t] + (def.elite && t === def.homeTerrain ? 50 : 0);
-      if (this.fortOwner[cell] === target) pct += this.fortPct[cell];
+      if (this.fortOwner[cell] === target) pct += (this.fortPct[cell] * (100 + def.bonus.fortDefensePct)) / 100;
+      if (def.rally >= 0 && this.owner[def.rally] === target) {
+        const dx = (cell % this.width) - (def.rally % this.width);
+        const dy = Math.floor(cell / this.width) - Math.floor(def.rally / this.width);
+        if (dx * dx + dy * dy <= RALLY_RADIUS * RALLY_RADIUS) pct += RALLY_DEFENSE_PCT;
+      }
       if (def.traitorUntil > this.tick) pct = (pct * TRAITOR_DEFENSE_PCT) / 100;
       if (def.protected) pct = (pct * PROTECTED_DEFENSE_PCT) / 100;
       cost += Math.ceil(((def.troops / def.cells) * pct) / 100);

@@ -1,33 +1,33 @@
+import { sanitizeNation, type NationProfile } from '../core/nation';
 import type { Transport } from './transport';
 
 export interface Player {
-  name: string;
+  nation: NationProfile;
   host: boolean;
 }
 
-const MAX_NAME = 20;
-
 /**
- * Who is in the room. Peers introduce themselves with a `hello`; whoever
- * opened the room says so and is the host. Should two peers claim that, the
- * one with the smaller id is it, so everybody agrees without a server.
+ * Who is in the room. Peers introduce themselves with a `hello` that carries
+ * their nation; whoever opened the room says so and is the host. Should two
+ * peers claim that, the one with the smaller id is it, so everybody agrees
+ * without a server.
  */
 export class Lobby {
   readonly net: Transport;
   /** The other peers. */
   readonly roster = new Map<string, Player>();
-  name: string;
+  nation: NationProfile;
   /** Called whenever somebody joins, leaves or changes. */
   onChange: () => void = () => {};
   private readonly claimsHost: boolean;
 
-  constructor(net: Transport, claimsHost: boolean, name: string) {
+  constructor(net: Transport, claimsHost: boolean, nation: NationProfile) {
     this.net = net;
     this.claimsHost = claimsHost;
-    this.name = name;
+    this.nation = nation;
     net.on('hello', (data, from) => {
-      if (typeof data?.name !== 'string') return;
-      this.roster.set(from, { name: data.name.trim().slice(0, MAX_NAME) || 'Spieler', host: data.host === true });
+      // Whatever a peer sends is cleaned up before anything here shows or stores it.
+      this.roster.set(from, { nation: sanitizeNation(data?.nation), host: data?.host === true });
       this.onChange();
     });
     net.onJoin = (peer) => this.hello(peer);
@@ -48,13 +48,14 @@ export class Lobby {
     return this.hostId === this.net.selfId;
   }
 
-  rename(name: string): void {
-    this.name = name.trim().slice(0, MAX_NAME) || 'Spieler';
+  /** The player edited their nation: tell the room. */
+  present(nation: NationProfile): void {
+    this.nation = nation;
     this.hello();
     this.onChange();
   }
 
   private hello(to?: string): void {
-    void this.net.send('hello', { name: this.name, host: this.claimsHost }, to);
+    void this.net.send('hello', { nation: this.nation, host: this.claimsHost }, to);
   }
 }
