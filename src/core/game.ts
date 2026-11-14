@@ -45,16 +45,28 @@ export interface Attack {
   pending: number;
 }
 
-export type Difficulty = 'easy' | 'normal' | 'hard';
+export type Difficulty = 'easy' | 'normal' | 'hard' | 'impossible';
 
-/**
- * How the AI is held back or favoured: its population growth in percent, the
- * ticks before it may pick a player as prey, and its appetite for war in percent.
- */
-export const DIFFICULTY: Record<Difficulty, { aiGrowthPct: number; peaceTicks: number; aggressionPct: number }> = {
-  easy: { aiGrowthPct: 70, peaceTicks: 1200, aggressionPct: 60 },
-  normal: { aiGrowthPct: 100, peaceTicks: 450, aggressionPct: 100 },
-  hard: { aiGrowthPct: 125, peaceTicks: 0, aggressionPct: 120 },
+/** How the AI is held back or favoured. */
+export interface Level {
+  /** The AI's population growth and gold income, in percent of the normal rate. */
+  aiGrowthPct: number;
+  aiIncomePct: number;
+  /** Ticks before the AI may pick a player as prey. */
+  peaceTicks: number;
+  /** The AI's appetite for war, in percent. */
+  aggressionPct: number;
+  /** Land an AI nation needs before it builds something, in percent: lower means it arms earlier and more densely. */
+  armsPct: number;
+  /** AI nations close ranks against a player who has outgrown them. */
+  coalition: boolean;
+}
+
+export const DIFFICULTY: Record<Difficulty, Level> = {
+  easy: { aiGrowthPct: 70, aiIncomePct: 100, peaceTicks: 1200, aggressionPct: 60, armsPct: 100, coalition: false },
+  normal: { aiGrowthPct: 100, aiIncomePct: 100, peaceTicks: 450, aggressionPct: 100, armsPct: 100, coalition: false },
+  hard: { aiGrowthPct: 125, aiIncomePct: 100, peaceTicks: 0, aggressionPct: 120, armsPct: 100, coalition: false },
+  impossible: { aiGrowthPct: 135, aiIncomePct: 140, peaceTicks: 0, aggressionPct: 150, armsPct: 60, coalition: true },
 };
 
 export interface GameOptions {
@@ -82,7 +94,7 @@ export class Game {
   tick = 0;
   readonly landCells: number;
   readonly rng: () => number;
-  readonly level: (typeof DIFFICULTY)[Difficulty];
+  readonly level: Level;
   private readonly delay: number[];
 
   buildings: Building[] = [];
@@ -309,7 +321,7 @@ export class Game {
     for (let i = 1; i < this.factions.length; i++) {
       const f = this.factions[i];
       if (!f.alive) continue;
-      f.gold += f.income;
+      f.gold += f.type === 'HUMAN_NATION' ? f.income : (f.income * this.level.aiIncomePct) / 100;
       const max = this.maxTroops(f);
       // Logistic growth, fastest at half capacity, plus a base rate so a drained empire recovers.
       if (f.troops < max) {

@@ -23,6 +23,19 @@ export function decide(g: Game, f: Faction): void {
   fight(g, f);
 }
 
+/**
+ * Whom the AI nations close ranks against at the highest level: the player
+ * with the most land, once that player has outgrown this nation. A small
+ * player is left to the ordinary rules, so lying low and treaties still work.
+ */
+function rivalOf(g: Game, f: Faction): Faction | undefined {
+  if (!g.level.coalition || f.type !== 'AI_NATION') return undefined;
+  // ponytail: "fastest growing" is read as "largest"; keep a cell history per faction if the difference ever matters.
+  let rival: Faction | undefined;
+  for (const p of g.factions) if (p.alive && p.type === 'HUMAN_NATION' && p.cells > f.cells && (!rival || p.cells > rival.cells)) rival = p;
+  return rival && g.diplo.status(g, f.id, rival.id) === 'Neutral' ? rival : undefined;
+}
+
 // --- ground war ------------------------------------------------------------
 
 function fight(g: Game, f: Faction): void {
@@ -60,6 +73,9 @@ function fight(g: Game, f: Faction): void {
       if (n.type !== 'HUMAN_NATION' || g.tick >= g.level.peaceTicks) prey = n;
     }
   }
+  // The coalition's rival comes before any weaker neighbour.
+  const rival = rivalOf(g, f);
+  if (rival && f.neighbors.includes(rival.id)) prey = rival;
   if (foe && f.troops * 10 > foe.troops * 8) {
     g.attack(f.id, foe.id, f.elite ? 60 : 40);
     return;
@@ -99,7 +115,8 @@ function develop(g: Game, f: Faction): void {
     return;
   }
   for (const [id, first, every] of NATION_WISHES) {
-    if (f.cells < first || count(id) > (f.cells - first) / every) continue;
+    const arms = g.level.armsPct / 100;
+    if (f.cells < first * arms || count(id) > (f.cells - first * arms) / (every * arms)) continue;
     const result = site(g, f, id);
     if (result === 'ok' || result === 'gold') return; // built it, or saving up for it
   }
@@ -139,6 +156,10 @@ function negotiate(g: Game, f: Faction): void {
   if (f.neighbors.length === 0 || g.rng() >= 0.15) return;
   const n = g.factions[f.neighbors[Math.floor(g.rng() * f.neighbors.length)]];
   if (!n.alive) return;
+  // Closing ranks: with a player ahead of them, AI nations warm to each other instead of to the player.
+  const rival = rivalOf(g, f);
+  if (rival === n) return;
+  if (rival && n.type === 'AI_NATION') d.adjust(f.id, n.id, 10);
   const status = d.status(g, f.id, n.id);
   if (status === 'War' || (status === 'Neutral' && n.troops > f.troops * 1.3)) {
     // Sue the stronger side for peace, or keep a strong neighbour quiet.
@@ -150,14 +171,18 @@ function negotiate(g: Game, f: Faction): void {
 // --- navy, air force, missiles ---------------------------------------------
 
 function operate(g: Game, f: Faction): void {
-  const enemy = f.enemy && g.factions[f.enemy].alive && g.diplo.status(g, f.id, f.enemy) === 'War' ? g.factions[f.enemy] : undefined;
+  // Strikes and landings go against the war enemy - or, in a coalition, against the player who leads.
+  const enemy = f.enemy && g.factions[f.enemy].alive && g.diplo.status(g, f.id, f.enemy) === 'War' ? g.factions[f.enemy] : rivalOf(g, f);
 
   if (enemy) {
     // Aim at a building, or failing that at the heart of the enemy's land.
     const heart = Math.round(enemy.sumY / enemy.cells) * g.width + Math.round(enemy.sumX / enemy.cells);
     const target = g.buildings.find((b) => b.owner === enemy.id)?.cell ?? g.nearest(heart, 12, (c) => g.owner[c] === enemy.id);
-    if (target >= 0) {
-      if (enemy.cells > 400 && launch(g, f.id, 'Nuke', target) === 'ok') return;
+    // A treasury saved up over a long peace must not arrive as one salvo: one strike per ten seconds,
+    // and a nuclear one at most once a minute. That leaves the defender's SAM sites time to reload.
+    const turn = Math.floor(g.tick / 20) + f.id;
+    if (target >= 0 && turn % 5 === 1) {
+      if (enemy.cells > 400 && turn % 30 === 1 && launch(g, f.id, 'Nuke', target) === 'ok') return;
       if (launch(g, f.id, 'Missile', target) === 'ok' || launch(g, f.id, 'Bomber', target) === 'ok') return;
     }
   }
