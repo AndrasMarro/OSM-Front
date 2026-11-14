@@ -17,8 +17,6 @@
       <section id="offers" class="panel" aria-label="Diplomatische Angebote" hidden></section>
       <section class="panel" aria-label="Rangliste nach Gebiet (Zellen)"><ol id="leaderboard"></ol></section>
       <section id="controls" class="panel">
-        <label for="strength">Angriffsstärke <output id="strength-value" for="strength">50 %</output></label>
-        <input id="strength" type="range" min="5" max="100" step="5" value="50" />
         <p id="hover">&nbsp;</p>
         <label for="volume">Lautstärke <output id="volume-value" for="volume"></output></label>
         <input id="volume" type="range" min="0" max="100" step="5" />
@@ -27,7 +25,19 @@
         <button id="to-menu" type="button">Karte wechseln</button>
       </section>
     </div>
-    <div id="alarms" aria-label="Warnungen" aria-live="assertive"></div>
+    <div id="top">
+      <section id="guide" class="panel" aria-label="Tutorial" aria-live="polite" hidden>
+        <small id="guide-progress"></small>
+        <strong id="guide-title"></strong>
+        <p id="guide-text"></p>
+        <button id="guide-button" type="button"></button>
+      </section>
+      <div id="alarms" aria-label="Warnungen" aria-live="assertive"></div>
+    </div>
+    <label id="troops" class="panel" hidden>
+      <span>Angriff <kbd>Q</kbd> <output id="strength-value" for="strength">50 %</output> <kbd>E</kbd></span>
+      <input id="strength" type="range" min="5" max="100" step="5" value="50" />
+    </label>
     <nav id="hotbar" aria-label="Bauen und Zielen per Taste" hidden></nav>
     <div id="radial" role="menu" hidden>
       <div class="ring"></div>
@@ -44,67 +54,31 @@
     <p id="toast" class="panel" role="status" aria-live="polite" hidden></p>
 
     <main id="menu">
-      <div class="panel">
-        <h1>OSM-Front</h1>
-        <p>Echtzeit-Strategie auf echten OpenStreetMap-Daten.</p>
+      <div class="hero">
+        <header>
+          <h1>OSM-Front</h1>
+          <p>Echtzeit-Strategie auf echten OpenStreetMap-Daten.</p>
+        </header>
 
-        <details id="nation" open>
-          <summary>Deine Nation</summary>
-          <form id="nation-form">
-            <canvas width="150" height="100" aria-label="Vorschau deiner Flagge"></canvas>
-            <div class="fields">
-              <label>Nation <input name="name" maxlength="20" required /></label>
-              <label>Herrscher <input name="ruler" maxlength="20" required /></label>
-              <label>Gebietsfarbe <input name="primary" type="color" list="palette" /></label>
-              <label>Grenzfarbe <input name="secondary" type="color" list="palette" /></label>
-            </div>
-            <fieldset>
-              <legend>Flagge</legend>
-              <label>Vorlage <select name="layout"></select></label>
-              <label>Emblem <select name="emblem"></select></label>
-              <label>Farbe 1 <input name="color1" type="color" list="palette" /></label>
-              <label>Farbe 2 <input name="color2" type="color" list="palette" /></label>
-              <label>Farbe 3 <input name="color3" type="color" list="palette" /></label>
-              <label>Emblemfarbe <input name="emblemColor" type="color" list="palette" /></label>
-            </fieldset>
-            <label>Doktrin <select name="doctrine"></select></label>
-            <datalist id="palette">
-              <option value="#2478ff"></option><option value="#e0452f"></option><option value="#1fa860"></option><option value="#c59b12"></option>
-              <option value="#8d4be0"></option><option value="#11a7b8"></option><option value="#e0559d"></option><option value="#e07a1f"></option>
-              <option value="#ffffff"></option><option value="#ffd45e"></option><option value="#12264d"></option><option value="#101820"></option>
-            </datalist>
-          </form>
-        </details>
-
-        <h2>Karte</h2>
-        <label>Schwierigkeit
-          <select id="difficulty">
-            <option value="easy">Leicht – die KI wächst langsamer und lässt dich zwei Minuten in Ruhe</option>
-            <option value="normal" selected>Normal – 45 Sekunden Schonfrist</option>
-            <option value="hard">Schwer – die KI wächst schneller und greift sofort an</option>
-          </select>
-        </label>
-        <div id="maps"></div>
-        <progress id="loading" max="1" hidden></progress>
-        <p id="status" role="status" aria-live="polite"></p>
-
-        <section id="lobby" aria-label="Mehrspieler">
-          <h2>Mehrspieler</h2>
-          <div id="lobby-off">
-            <p>Spiele mit anderen direkt von Browser zu Browser, ohne Server.</p>
-            <button id="room-create" type="button">Raum erstellen</button>
-          </div>
-          <div id="lobby-on" hidden>
-            <label>Einladungslink <input id="room-link" readonly /></label>
-            <button id="room-copy" type="button">Link kopieren</button>
-            <ul id="players"></ul>
-            <p id="lobby-status" role="status" aria-live="polite"></p>
-            <button id="room-leave" type="button">Raum verlassen</button>
-          </div>
+        <section id="nation-card" class="panel" aria-label="Deine Nation">
+          <h2><span class="step">1</span> Nation</h2>
+          <img id="nation-flag" alt="Deine Flagge" width="120" height="80" />
+          <strong id="nation-name"></strong>
+          <span id="nation-ruler"></span>
+          <span id="nation-doctrine"></span>
+          <button id="nation-edit" type="button">✏️ Nation anpassen</button>
         </section>
 
-        <details id="custom">
-          <summary>Eigene Karte</summary>
+        <section id="map-picker" class="panel" aria-label="Karte und Schwierigkeit">
+          <h2><span class="step">2</span> Karte</h2>
+          <div id="map-tabs" role="tablist">
+            <button type="button" role="tab" data-tab="continents">Welt &amp; Kontinente</button>
+            <button type="button" role="tab" data-tab="regions">Regionen &amp; Länder</button>
+            <button type="button" role="tab" data-tab="custom">Eigene Karten</button>
+          </div>
+          <div id="maps"></div>
+          <details id="custom" hidden>
+            <summary>Neue Karte anlegen oder importieren</summary>
           <form id="custom-form">
             <label>Name <input name="name" required maxlength="40" value="Meine Karte" /></label>
             <fieldset>
@@ -127,9 +101,72 @@
           </form>
           <label>Karte aus JSON-Datei importieren <input id="custom-import" type="file" accept="application/json,.json" /></label>
           <button id="custom-clear" type="button">Eigene Karten löschen</button>
-        </details>
+          </details>
+          <div id="difficulty" role="radiogroup" aria-label="Schwierigkeit">
+            <button type="button" role="radio" data-level="easy">Leicht</button>
+            <button type="button" role="radio" data-level="normal">Normal</button>
+            <button type="button" role="radio" data-level="hard">Schwer</button>
+            <button type="button" role="radio" data-level="impossible">Unmöglich</button>
+          </div>
+        </section>
+
+        <section id="launch" class="panel" aria-label="Spiel starten">
+          <h2><span class="step">3</span> Los</h2>
+          <button id="play" type="button">⚔️ Einzelspieler starten</button>
+          <button id="lobby-open" type="button">🌐 Mehrspieler-Lobby</button>
+          <button id="tutorial-start" type="button">🎓 Tutorial spielen</button>
+          <progress id="loading" max="1" hidden></progress>
+          <p id="status" role="status" aria-live="polite"></p>
+        </section>
       </div>
     </main>
+
+    <dialog id="nation-dialog" aria-labelledby="nation-dialog-title">
+      <h2 id="nation-dialog-title">Deine Nation</h2>
+      <form id="nation-form">
+        <canvas width="150" height="100" aria-label="Vorschau deiner Flagge"></canvas>
+        <div class="fields">
+          <label>Nation <input name="name" maxlength="20" required /></label>
+          <label>Herrscher <input name="ruler" maxlength="20" required /></label>
+          <label>Gebietsfarbe <input name="primary" type="color" list="palette" /></label>
+          <label>Grenzfarbe <input name="secondary" type="color" list="palette" /></label>
+        </div>
+        <fieldset>
+          <legend>Flagge</legend>
+          <label>Vorlage <select name="layout"></select></label>
+          <label>Emblem <select name="emblem"></select></label>
+          <label>Farbe 1 <input name="color1" type="color" list="palette" /></label>
+          <label>Farbe 2 <input name="color2" type="color" list="palette" /></label>
+          <label>Farbe 3 <input name="color3" type="color" list="palette" /></label>
+          <label>Emblemfarbe <input name="emblemColor" type="color" list="palette" /></label>
+        </fieldset>
+        <label>Doktrin <select name="doctrine"></select></label>
+        <datalist id="palette">
+          <option value="#2478ff"></option><option value="#e0452f"></option><option value="#1fa860"></option><option value="#c59b12"></option>
+          <option value="#8d4be0"></option><option value="#11a7b8"></option><option value="#e0559d"></option><option value="#e07a1f"></option>
+          <option value="#ffffff"></option><option value="#ffd45e"></option><option value="#12264d"></option><option value="#101820"></option>
+        </datalist>
+      </form>
+      <form method="dialog"><button>Fertig</button></form>
+    </dialog>
+
+    <dialog id="lobby-dialog" aria-labelledby="lobby-title">
+      <h2 id="lobby-title">Mehrspieler</h2>
+      <section id="lobby">
+          <div id="lobby-off">
+            <p>Spiele mit anderen direkt von Browser zu Browser, ohne Server.</p>
+            <button id="room-create" type="button">Raum erstellen</button>
+          </div>
+          <div id="lobby-on" hidden>
+            <label>Einladungslink <input id="room-link" readonly /></label>
+            <button id="room-copy" type="button">Link kopieren</button>
+            <ul id="players"></ul>
+            <p id="lobby-status" role="status" aria-live="polite"></p>
+            <button id="room-leave" type="button">Raum verlassen</button>
+          </div>
+      </section>
+      <form method="dialog"><button>Schließen</button></form>
+    </dialog>
 
     <button id="custom-pick-done" class="panel" type="button" hidden>Diesen Ausschnitt übernehmen</button>
 
@@ -137,17 +174,21 @@
       <h2 id="help-title">So spielst du</h2>
       <dl>
         <dt>Startgebiet</dt>
-        <dd>Klicke auf freies Land. Danach breitet ein Klick auf freies Nachbarland dein Reich aus.</dd>
+        <dd>Klicke auf freies Land, um deine Nation zu gründen.</dd>
         <dt>Linksklick</dt>
-        <dd>Öffnet am Klickpunkt das Menü: Bauen auf eigenem Gebiet, Angriff, Schiffe, Luftwaffe, Raketen und Diplomatie auf fremdem. Fahre über einen Knopf, um Kosten und Wirkung zu sehen.</dd>
+        <dd>Greift sofort an: freies Nachbarland oder eine angrenzende Fraktion, mit dem unten eingestellten Truppenanteil. Ziehen verschiebt die Karte.</dd>
+        <dt>Rechtsklick</dt>
+        <dd>Öffnet das Radialmenü: Bauen auf eigenem Gebiet; Schiffe, Luftwaffe, Raketen und Diplomatie auf fremdem; Marine auf Wasser.</dd>
+        <dt><kbd>Q</kbd> <kbd>E</kbd> · <kbd>A</kbd> <kbd>D</kbd></dt>
+        <dd>Truppenanteil senken / erhöhen – auch mit dem Mausrad über dem Regler oder mit Umschalt + Mausrad.</dd>
         <dt><kbd>1</kbd>–<kbd>7</kbd></dt>
-        <dd>Gebäude wählen; die Vorschau unter der Maus zeigt Reichweite und ob der Platz taugt. Klick baut.</dd>
+        <dd>Gebäude wählen; die Vorschau unter der Maus zeigt Reichweite und ob der Platz taugt. Linksklick baut.</dd>
         <dt><kbd>8</kbd> <kbd>9</kbd></dt>
-        <dd>Bomber und Rakete zielen: der nächste Klick feuert.</dd>
+        <dd>Bomber und Rakete zielen: der nächste Linksklick feuert.</dd>
         <dt><kbd>Esc</kbd> / Rechtsklick</dt>
-        <dd>Menü schließen, Bau- oder Zielmodus verlassen.</dd>
+        <dd>Bau- oder Zielmodus verlassen, Menü schließen.</dd>
         <dt>Truppen-Regler</dt>
-        <dd>Legt fest, welcher Anteil deiner Truppen angreift, übersetzt oder verschenkt wird.</dd>
+        <dd>Unten in der Mitte: welcher Anteil deiner Truppen angreift, übersetzt oder verschenkt wird.</dd>
         <dt>Warnungen</dt>
         <dd>Rote Meldungen oben zeigen Angriffe auf dich. Ein Klick springt zum Ort des Geschehens.</dd>
         <dt><kbd>M</kbd> · <kbd>H</kbd></dt>

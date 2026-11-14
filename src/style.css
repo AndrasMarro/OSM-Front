@@ -35,6 +35,9 @@ body {
   gap: 8px;
   width: 250px;
 }
+#hud > * {
+  min-width: 0;
+}
 #hud[hidden],
 #menu[hidden] {
   display: none;
@@ -84,23 +87,86 @@ body {
 #nation-form > label {
   grid-column: 1 / -1;
 }
-#menu #nation-form fieldset {
+dialog #nation-form fieldset {
   grid-template-columns: repeat(2, 1fr);
 }
-#menu input[type='color'] {
+:is(#menu, dialog) input[type='color'] {
   width: 100%;
   height: 34px;
   padding: 2px;
   box-sizing: border-box;
 }
-#alarms {
+#top {
   position: absolute;
   top: 12px;
   left: 50%;
   display: grid;
-  gap: 6px;
+  gap: 8px;
   transform: translateX(-50%);
   justify-items: center;
+  pointer-events: none;
+}
+#top > * {
+  pointer-events: auto;
+}
+#alarms {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+}
+#guide {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 14px;
+  align-items: center;
+  width: min(92vw, 520px);
+  box-sizing: border-box;
+  border: 1px solid #ffd45e;
+}
+#guide[hidden],
+#troops[hidden] {
+  display: none;
+}
+#guide small {
+  color: #ffd45e;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+#guide strong {
+  grid-column: 1;
+  font-size: 1.15em;
+}
+#guide p {
+  grid-column: 1;
+  margin: 0;
+  color: #cdd5df;
+}
+#guide button {
+  grid-column: 2;
+  grid-row: 1 / 4;
+}
+#guide.finished button {
+  border-color: #8fe39a;
+  background: #1f3a2a;
+  font-weight: 700;
+}
+#troops {
+  position: absolute;
+  bottom: 84px;
+  left: 50%;
+  display: grid;
+  gap: 2px;
+  width: 260px;
+  padding: 6px 12px;
+  transform: translateX(-50%);
+  text-align: center;
+}
+#troops output {
+  display: inline-block;
+  min-width: 3.4em;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 #alarms button {
   padding: 8px 16px;
@@ -293,12 +359,12 @@ body {
   text-align: center;
 }
 #banner {
-  bottom: 132px;
+  bottom: 190px;
   font-size: 1.15em;
   font-weight: 600;
 }
 #toast {
-  bottom: 84px;
+  bottom: 146px;
 }
 #menu {
   position: absolute;
@@ -307,39 +373,211 @@ body {
   place-items: center;
   padding: 16px;
   overflow: auto;
-  background: rgb(8 10 14 / 70%);
+  /* Dimmed, not hidden: the map behind stays part of the picture. */
+  background: radial-gradient(ellipse at center, rgb(8 10 14 / 45%), rgb(8 10 14 / 82%));
 }
-#menu .panel {
-  max-width: 620px;
-  padding: 24px 28px;
+/* While the menu is open the map behind it drifts slowly. */
+body:has(#menu:not([hidden])) #map {
+  animation: drift 50s ease-in-out infinite alternate;
+}
+@keyframes drift {
+  from {
+    transform: scale(1.06) translate(-1.5%, -1%);
+  }
+  to {
+    transform: scale(1.14) translate(1.5%, 1%);
+  }
+}
+.hero {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  grid-template-areas: 'head head' 'nation maps' 'launch launch';
+  gap: 12px;
+  width: min(100%, 880px);
+}
+.hero header {
+  grid-area: head;
+  text-align: center;
+  text-shadow: 0 2px 12px #000;
+}
+.hero header p {
+  margin: 0;
+  color: #cdd5df;
 }
 #menu h1 {
-  margin: 0 0 4px;
-  font-size: 2em;
-  letter-spacing: 0.02em;
+  margin: 0;
+  font-size: 2.6em;
+  letter-spacing: 0.04em;
+}
+#menu h2 {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 10px;
+  font-size: 1.05em;
+  font-weight: 600;
+}
+.step {
+  display: inline-grid;
+  place-items: center;
+  width: 1.7em;
+  height: 1.7em;
+  border-radius: 50%;
+  background: #2478ff;
+  font-size: 0.85em;
+  font-weight: 700;
+}
+#nation-card {
+  grid-area: nation;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  justify-items: center;
+  text-align: center;
+  border-top: 4px solid var(--nation, #2478ff);
+}
+#nation-card h2 {
+  justify-self: start;
+}
+#nation-flag {
+  width: 120px;
+  height: 80px;
+  border-radius: 6px;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 50%);
+}
+#nation-name {
+  margin-top: 6px;
+  font-size: 1.25em;
+}
+#nation-ruler,
+#nation-doctrine {
+  color: #b8c2cf;
+}
+#nation-edit {
+  margin-top: 10px;
+  width: 100%;
+}
+#map-picker {
+  grid-area: maps;
+  min-width: 0;
+}
+#map-tabs,
+#difficulty {
+  display: flex;
+  gap: 0;
+}
+#map-tabs button,
+#difficulty button {
+  flex: 1;
+  border-radius: 0;
+}
+#map-tabs button + button,
+#difficulty button + button {
+  margin-left: -1px;
+}
+#map-tabs button:first-child,
+#difficulty button:first-child {
+  border-radius: 8px 0 0 8px;
+}
+#map-tabs button:last-child,
+#difficulty button:last-child {
+  border-radius: 0 8px 8px 0;
+}
+#map-tabs button[aria-selected='true'],
+#difficulty button[aria-checked='true'] {
+  position: relative;
+  border-color: #7db4ff;
+  background: #23406b;
+  font-weight: 700;
+}
+#difficulty button[data-level='impossible'][aria-checked='true'] {
+  border-color: #ff5a3d;
+  background: #5c100a;
+}
+#difficulty {
+  margin-top: 12px;
 }
 #maps {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
   gap: 8px;
+  min-height: 190px;
+  margin-top: 10px;
+  align-content: start;
 }
-#menu h2,
-#menu summary {
-  margin: 18px 0 6px;
-  font-size: 1.1em;
-  font-weight: 600;
+#maps:empty::after {
+  content: 'Noch keine eigene Karte. Lege unten eine an oder importiere eine Datei.';
+  grid-column: 1 / -1;
+  color: #b8c2cf;
 }
-#menu summary {
+#maps button {
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  text-align: left;
+}
+#maps button[hidden] {
+  display: none;
+}
+#maps button[aria-pressed='true'] {
+  border-color: #ffd45e;
+  background: #2b3140;
+  box-shadow: 0 0 0 1px #ffd45e;
+}
+#maps svg {
+  width: 100%;
+  border-radius: 5px;
+  background: #0d2238;
+}
+#maps small {
+  color: #8f9bab;
+}
+#launch {
+  grid-area: launch;
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 8px 10px;
+  align-items: stretch;
+}
+#launch h2,
+#launch progress,
+#launch p {
+  grid-column: 1 / -1;
+}
+#launch h2 {
+  margin: 0;
+}
+#play {
+  padding: 16px;
+  border-color: #4a90ff;
+  background: linear-gradient(#2f7df0, #1b56b8);
+  font-size: 1.3em;
+  font-weight: 700;
+}
+#play:hover:not(:disabled),
+#play:focus-visible {
+  background: linear-gradient(#4a90ff, #2467d0);
+}
+#tutorial-start.suggest {
+  border-color: #ffd45e;
+  animation: alarm 0.9s ease-in-out infinite alternate;
+}
+#custom summary {
+  margin: 10px 0 4px;
   cursor: pointer;
+  color: #b8c2cf;
 }
-#menu label {
+dialog h2 + #nation-form {
+  margin-top: 0;
+}
+:is(#menu, dialog) label {
   display: grid;
   gap: 3px;
   margin: 8px 0;
   color: #b8c2cf;
 }
-#menu input:not([type='file']),
-#menu select {
+:is(#menu, dialog) input:not([type='file']),
+:is(#menu, dialog) select {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
@@ -350,7 +588,7 @@ body {
   color: #eef1f5;
   font: inherit;
 }
-#menu fieldset {
+:is(#menu, dialog) fieldset {
   min-width: 0;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -360,7 +598,7 @@ body {
   border: 1px solid #3a4658;
   border-radius: 8px;
 }
-#menu fieldset input {
+:is(#menu, dialog) fieldset input {
   width: 100%;
   box-sizing: border-box;
 }
@@ -449,7 +687,9 @@ kbd {
 }
 /* People who asked their system for less motion get steady warnings instead of pulsing ones. */
 @media (prefers-reduced-motion: reduce) {
-  #alarms button {
+  #alarms button,
+  #tutorial-start.suggest,
+  body:has(#menu:not([hidden])) #map {
     animation: none;
   }
 }
@@ -471,6 +711,16 @@ kbd {
   }
   #nation-form {
     grid-template-columns: 1fr;
+  }
+  .hero {
+    grid-template-columns: 1fr;
+    grid-template-areas: 'head' 'nation' 'maps' 'launch';
+  }
+  #launch {
+    grid-template-columns: 1fr;
+  }
+  #menu {
+    place-items: start center;
   }
 }
 #status {

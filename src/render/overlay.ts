@@ -44,6 +44,8 @@ export interface View {
   /** Cell the context menu is open for, or -1. */
   selected: number;
   ghost: Ghost | null;
+  /** A place the tutorial points at: a pulsing circle of this many cells. */
+  hint?: { cell: number; radius: number } | null;
 }
 
 /** Below this many pixels per cell the map is seen from so far away that buildings shrink to dots. */
@@ -303,6 +305,18 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, gam
       ctx.lineTo(p.x - 6, p.y + 6);
       ctx.stroke();
     }
+  }
+
+  if (view.hint) {
+    const p = ofCell(view.hint.cell);
+    const r = Math.max(18, view.hint.radius * cellPx) * (1 + 0.12 * pulse);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgb(255 212 94 / ${12 + 10 * pulse}%)`;
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#ffd45e';
+    ctx.stroke();
   }
 
   if (selected >= 0) {

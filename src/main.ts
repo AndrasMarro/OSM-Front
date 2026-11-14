@@ -5,7 +5,7 @@ import { buildingRegistry, canBuild, linkedCity, price, type BuildingDefinition,
 import type { CommandResult } from './core/commands';
 import type { DiplomaticStatus, Treaty } from './core/diplomacy';
 import type { Faction } from './core/faction';
-import type { NationProfile } from './core/nation';
+import { doctrineRegistry, type NationProfile } from './core/nation';
 import { DIFFICULTY, NEUTRAL, TICKS_PER_SECOND, type Difficulty, type Game, type GameEvent } from './core/game';
 import { GridProjection } from './core/maps/projection';
 import { mapRegistry, validateMapPack } from './core/maps/registry';
@@ -27,6 +27,7 @@ import { exportPack, setupCustomMaps } from './ui/custom-maps';
 import { setupNationEditor } from './ui/nation-editor';
 import { Radial, type RadialItem, type RadialSpec } from './ui/radial';
 import { getVolume, play, played, setVolume, type Sound } from './ui/sound';
+import { Tutorial, TUTORIAL_STEPS } from './ui/tutorial';
 
 const BASEMAP_STYLE = 'https://tiles.openfreemap.org/styles/positron';
 const LAYER = 'territory';
@@ -96,6 +97,8 @@ const map = new MapLibreMap({
   center: [10, 30],
   zoom: 1.5,
   dragRotate: false,
+  // A press that moves less than this many pixels is a click; anything more pans the map.
+  clickTolerance: 5,
   pitchWithRotate: false,
   touchPitch: false,
 });
@@ -106,6 +109,8 @@ const mapReady = new Promise<void>((resolve) => map.once('load', () => resolve()
 let session: Session | null = null;
 /** The multiplayer room, if the player is in one. */
 let lobby: Lobby | null = null;
+/** Id of the room in the address bar, also while the connection to it is still being made. */
+let room: string | null = null;
 /** Bumped on every map change so a slow terrain download cannot start a stale game. */
 let generation = 0;
 /** True while a map is loading: nothing else can be started. */
@@ -113,9 +118,21 @@ let busy = false;
 
 const me = () => session?.lockstep.me ?? null;
 
-const difficultySelect = $<HTMLSelectElement>('difficulty');
-difficultySelect.value = localStorage.getItem('osm-front:difficulty') ?? 'normal';
-difficultySelect.addEventListener('change', () => localStorage.setItem('osm-front:difficulty', difficultySelect.value));
+/** The level picked in the menu; in a room the host's choice counts. */
+let difficulty: Difficulty = (localStorage.getItem('osm-front:difficulty') ?? 'normal') as Difficulty;
+if (!(difficulty in DIFFICULTY)) difficulty = 'normal';
+const levelButtons = [...$('difficulty').querySelectorAll('button')];
+function showDifficulty(): void {
+  for (const b of levelButtons) b.setAttribute('aria-checked', `${b.dataset.level === difficulty}`);
+}
+for (const b of levelButtons) {
+  b.addEventListener('click', () => {
+    difficulty = b.dataset.level as Difficulty;
+    localStorage.setItem('osm-front:difficulty', difficulty);
+    showDifficulty();
+  });
+}
+showDifficulty();
 
 // --- sound, help and the end of a game -------------------------------------------
 
@@ -195,11 +212,15 @@ function order(cmd: PlayerCommand, say: (result: CommandResult) => string): void
 
 // --- map selection -------------------------------------------------------------
 
-/** Only the host of a room picks the map; while one loads, nobody picks anything. */
+/** Only the host of a room picks map and level; while a map loads, nobody picks anything. */
 function refreshMapButtons(): void {
   const locked = busy || (lobby !== null && !lobby.isHost);
-  for (const b of $('maps').querySelectorAll('button')) b.disabled = locked;
-  difficultySelect.disabled = locked;
+  for (const b of [...$('maps').querySelectorAll('button'), ...levelButtons]) b.disabled = locked;
+  const play = $<HTMLButtonElement>('play');
+  play.disabled = locked || !selectedPack();
+  play.textContent = room === null ? '⚔️ Einzelspieler starten' : lobby?.isHost ? '⚔️ Spiel für alle starten' : 'Warte auf den Host …';
+  // The tutorial is a game of one.
+  $<HTMLButtonElement>('tutorial-start').disabled = busy || room !== null;
 }
 
 function showMenu(): void {
@@ -208,13 +229,15 @@ function showMenu(): void {
   if (gameover.open) gameover.close('watch');
   lobby?.net.on('turn', () => {}); // a game we left no longer listens
   session = null;
+  tutorial = null;
+  renderGuide();
   busy = false;
   if (map.getLayer(LAYER)) map.removeLayer(LAYER);
   if (map.getSource(LAYER)) map.removeSource(LAYER);
   hud.hidden = true;
   $('hover').textContent = ' ';
   $('offers').hidden = true;
-  $('hotbar').hidden = true;
+  $('hotbar').hidden = $('troops').hidden = true;
   $('alarms').replaceChildren();
   alarmButtons.clear();
   radial.close();
@@ -224,6 +247,7 @@ function showMenu(): void {
   status.textContent = '';
   menu.hidden = false;
   refreshMapButtons();
+  flyToSelected();
 }
 
 /**
@@ -240,6 +264,7 @@ async function begin(pack: MapPackDefinition, terrain: Uint8Array, seed: number,
   const s: Session = { pack, proj, game, lockstep, painter, over: false, running: false, startedAt: performance.now(), selected: -1, wars: new Set(), offers: '', feedback: [], heardTick: -1, peakCells: 0 };
   lockstep.onResult = (cmd, result) => {
     toast(s.feedback.shift()?.(result) ?? '');
+    watchTutorial(s, cmd, result);
     // The free-land shortcut fires on every click there; its refusals are not worth a buzz.
     if (result === 'ok' || result === 'pending') play(ORDER_SOUND[cmd.type] ?? 'order');
     else if (!(cmd.type === 'attack' && cmd.target === NEUTRAL)) play('refuse');
@@ -279,15 +304,16 @@ async function begin(pack: MapPackDefinition, terrain: Uint8Array, seed: number,
   hud.hidden = false;
   $<HTMLProgressElement>('loading').hidden = true;
   dirty = true;
-  // First game in this browser: show how it is played.
-  if (!localStorage.getItem('osm-front:seen-help')) {
-    localStorage.setItem('osm-front:seen-help', '1');
-    help.showModal();
-  }
+  for (const id of ['nation-dialog', 'lobby-dialog']) $<HTMLDialogElement>(id).close();
+  // Whoever has started a game no longer needs the tutorial pointed out.
+  localStorage.setItem('osm-front:seen-help', '1');
+  $('tutorial-start').classList.remove('suggest');
+  if (tutorial) prepareTutorial(s);
+  renderGuide();
 }
 
 /** Loads a map's terrain and starts the game - for everybody in the room, if there is one. */
-async function startMap(pack: MapPackDefinition): Promise<void> {
+async function startMap(pack: MapPackDefinition, level: Difficulty = difficulty): Promise<void> {
   const mine = ++generation;
   busy = true;
   refreshMapButtons();
@@ -300,66 +326,164 @@ async function startMap(pack: MapPackDefinition): Promise<void> {
     const terrain = await loadTerrain(pack, proj, (done, total) => (loading.value = done / total));
     if (mine !== generation) return;
     const seed = (Math.random() * 2 ** 32) >>> 0;
-    const difficulty = difficultySelect.value as Difficulty;
     // Everybody plays on the host's grid: no peer derives terrain of its own that could differ.
     // A mask inside the pack would only be dead weight on the wire.
     if (lobby) {
-      await lobby.net.send('start', { pack: { ...pack, terrain: { type: 'osm' } }, seed, difficulty });
+      await lobby.net.send('start', { pack: { ...pack, terrain: { type: 'osm' } }, seed, difficulty: level });
       await lobby.net.send('grid', terrain);
     }
     if (mine !== generation) return;
-    await begin(pack, terrain, seed, difficulty);
+    await begin(pack, terrain, seed, level);
   } catch (err) {
     if (mine !== generation) return;
     console.error(err);
     loading.hidden = true;
     status.textContent = `Terrain konnte nicht geladen werden (${err instanceof Error ? err.message : err}). Bitte erneut versuchen.`;
     busy = false;
+    tutorial = null;
     refreshMapButtons();
   }
 }
 
+// --- start screen: nation card, map tiles, launch buttons ---------------------------
+
+const CONTINENTS = new Set(['World', 'Europe', 'Asia', 'Americas', 'NorthAmerica', 'SouthAmerica', 'Australia', 'Antarctica']);
+const PRESET_IDS = new Set(mapRegistry.list().map((p) => p.id));
+type Tab = 'continents' | 'regions' | 'custom';
+const tabOf = (id: string): Tab => (CONTINENTS.has(id) ? 'continents' : PRESET_IDS.has(id) ? 'regions' : 'custom');
+let selectedMap = localStorage.getItem('osm-front:map') ?? 'Europe';
+const selectedPack = () => mapRegistry.get(selectedMap);
+let tab: Tab = 'continents';
+
+/** Where on the globe a map lies: its box on a small plate carrée. */
+function locator(pack: MapPackDefinition): string {
+  const [w, s, e, n] = pack.bbox;
+  const lines = [-120, -60, 0, 60, 120].map((x) => `<path d="M${x + 180} 0V180"/>`).join('') + [-45, 0, 45].map((y) => `<path d="M0 ${90 - y}H360"/>`).join('');
+  return `<svg viewBox="0 0 360 180" aria-hidden="true"><g stroke="#27496b" stroke-width="1">${lines}</g><rect x="${w + 180}" y="${90 - n}" width="${Math.max(6, e - w)}" height="${Math.max(6, n - s)}" rx="3" fill="#ffd45e55" stroke="#ffd45e" stroke-width="3"/></svg>`;
+}
+
+/** The background map travels to the selected map while the menu is open. */
+function flyToSelected(): void {
+  const pack = selectedPack();
+  if (!pack || menu.hidden) return;
+  const [w, s, e, n] = pack.bbox;
+  map.setMinZoom(0);
+  map.setMaxZoom(22);
+  map.fitBounds([w, s, e, n], { padding: 40, duration: 1500 });
+}
+
+function showMaps(): void {
+  for (const b of $('map-tabs').querySelectorAll('button')) b.setAttribute('aria-selected', `${b.dataset.tab === tab}`);
+  for (const b of $('maps').querySelectorAll('button')) {
+    b.hidden = tabOf(b.dataset.map!) !== tab;
+    b.setAttribute('aria-pressed', `${b.dataset.map === selectedMap}`);
+  }
+  $('custom').hidden = tab !== 'custom';
+  refreshMapButtons();
+}
+
+function selectMap(id: string): void {
+  if (!mapRegistry.get(id)) return;
+  selectedMap = id;
+  localStorage.setItem('osm-front:map', id);
+  tab = tabOf(id);
+  showMaps();
+  flyToSelected();
+}
+
 function addMapButton(pack: MapPackDefinition): void {
-  const button = Object.assign(document.createElement('button'), { type: 'button', textContent: pack.name });
+  const proj = new GridProjection(pack.bbox, pack.grid.width);
+  const nations = pack.spawns.filter((sp) => sp.kind === 'nation').length;
+  const button = Object.assign(document.createElement('button'), { type: 'button' });
   button.dataset.map = pack.id;
-  button.addEventListener('click', () => void startMap(pack));
-  // A re-imported map replaces its old button.
+  // The locator is built from numbers only; names go in as text.
+  button.innerHTML = locator(pack);
+  button.append(Object.assign(document.createElement('strong'), { textContent: pack.name }), Object.assign(document.createElement('small'), { textContent: `${proj.width} × ${proj.height} · ${nations} Nationen` }));
+  button.addEventListener('click', () => selectMap(pack.id));
+  // A re-imported map replaces its old tile.
   const old = [...$('maps').querySelectorAll('button')].find((b) => b.dataset.map === pack.id);
   if (old) old.replaceWith(button);
   else $('maps').append(button);
-  refreshMapButtons();
+  // A map the player has just made is the one they want.
+  if (menuReady && !PRESET_IDS.has(pack.id)) selectMap(pack.id);
+  else showMaps();
 }
+let menuReady = false;
 for (const pack of mapRegistry.list()) addMapButton(pack);
 setupCustomMaps(map, addMapButton, (text) => (status.textContent = text), (visible) => (menu.hidden = !visible));
+menuReady = true;
+for (const b of $('map-tabs').querySelectorAll('button')) {
+  b.addEventListener('click', () => {
+    tab = b.dataset.tab as Tab;
+    showMaps();
+  });
+}
+if (!selectedPack()) selectedMap = 'Europe';
+tab = tabOf(selectedMap);
+showMaps();
+void mapReady.then(flyToSelected);
 
 /** The player's own nation, as made in the editor. It goes out with the spawn command and to the room. */
 let nation = setupNationEditor($<HTMLFormElement>('nation-form'), (edited) => {
   nation = edited;
+  showNation();
   lobby?.present(edited);
 });
+function showNation(): void {
+  $<HTMLImageElement>('nation-flag').src = flagImage(nation.flag).url;
+  $('nation-name').textContent = nation.name;
+  $('nation-ruler').textContent = `Herrscher: ${nation.ruler}`;
+  $('nation-doctrine').textContent = doctrineRegistry.get(nation.doctrine)?.name ?? '';
+  $('nation-card').style.setProperty('--nation', nation.primary);
+}
+showNation();
+$('nation-edit').addEventListener('click', () => $<HTMLDialogElement>('nation-dialog').showModal());
+$('lobby-open').addEventListener('click', () => $<HTMLDialogElement>('lobby-dialog').showModal());
+$('play').addEventListener('click', () => {
+  const pack = selectedPack();
+  if (pack) void startMap(pack);
+});
+$('tutorial-start').addEventListener('click', () => {
+  const pack = mapRegistry.get('Balkans');
+  if (!pack) return;
+  tutorial = new Tutorial();
+  void startMap(pack, 'easy');
+});
+// First visit: point at the tutorial.
+if (!localStorage.getItem('osm-front:seen-help')) {
+  $('tutorial-start').classList.add('suggest');
+  status.textContent = 'Neu hier? Das Tutorial zeigt dir in einer Minute, wie gespielt wird.';
+}
 
 $('to-menu').addEventListener('click', showMenu);
 $('export-map').addEventListener('click', () => {
   if (session) exportPack(session.pack, session.game.terrain, session.proj.width, session.proj.height);
 });
-// One troop share, two sliders: the one in the HUD and the one on the context menu.
+// One troop share, two sliders: the one above the hotkey bar and the one on the context menu.
 const share = $<HTMLInputElement>('share');
-for (const [from, to] of [
-  [strength, share],
-  [share, strength],
-]) {
-  from.addEventListener('input', () => {
-    to.value = from.value;
-    $('strength-value').textContent = $('share-value').textContent = `${from.value} %`;
-    radial.refresh();
-  });
+function setStrength(percent: number): void {
+  const value = `${Math.max(5, Math.min(100, Math.round(percent / 5) * 5))}`;
+  strength.value = share.value = value;
+  $('strength-value').textContent = $('share-value').textContent = `${value} %`;
+  radial.refresh();
 }
+for (const slider of [strength, share]) slider.addEventListener('input', () => setStrength(Number(slider.value)));
+// The wheel sets the share over the slider, and anywhere with Shift held; otherwise it zooms the map.
+addEventListener(
+  'wheel',
+  (e) => {
+    if (!session || !menu.hidden || !(e.shiftKey || $('troops').contains(e.target as Node))) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setStrength(Number(strength.value) + ((e.deltaY || e.deltaX) < 0 ? 5 : -5));
+  },
+  { capture: true, passive: false },
+);
 
 // --- multiplayer lobby -----------------------------------------------------------
 
 const roomOf = () => /^[\w-]{3,40}$/.exec(new URLSearchParams(location.hash.slice(1)).get('room') ?? '')?.[0] ?? null;
 const hostKey = (room: string) => `osm-front:host:${room}`;
-let room: string | null = null;
 
 function renderLobby(): void {
   $('lobby-off').hidden = lobby !== null || room !== null;
@@ -376,9 +500,9 @@ function renderLobby(): void {
   const reach = !relays ? '' : relays.open > 0 ? ` (${relays.open} von ${relays.total} Relays erreichbar)` : ' Kein Relay ist erreichbar: andere Spieler finden diesen Raum gerade nicht.';
   $('lobby-status').textContent =
     (lobby.isHost
-      ? `Wähle oben eine Karte: das Spiel startet für alle ${lobby.roster.size + 1} im Raum.`
+      ? `Schließe dieses Fenster, wähle Karte und Schwierigkeit und drücke „Spiel für alle starten“ (${lobby.roster.size + 1} im Raum).`
       : host
-        ? 'Der Host wählt die Karte. Es geht los, sobald er startet.'
+        ? 'Der Host wählt Karte und Schwierigkeit. Es geht los, sobald er startet.'
         : 'Warte auf den Host …') + reach;
   refreshMapButtons();
   if (session && !session.over && !lobby.isHost && !host) {
@@ -453,8 +577,10 @@ $('room-leave').addEventListener('click', () => {
 addEventListener('hashchange', () => {
   if (roomOf() !== room) location.reload();
 });
-if (roomOf()) void enterRoom(roomOf()!);
-else renderLobby();
+if (roomOf()) {
+  void enterRoom(roomOf()!);
+  $<HTMLDialogElement>('lobby-dialog').showModal();
+} else renderLobby();
 // Relays connect and drop in the background; keep the lobby's picture of them current.
 setInterval(() => {
   if (lobby && !menu.hidden) renderLobby();
@@ -573,7 +699,7 @@ const toggleSlot = (slot: Slot) => setMode(sameMode(mode, slot.mode) ? null : sl
 
 function refreshHotbar(): void {
   const mine = me();
-  $('hotbar').hidden = !session || !mine?.alive;
+  $('hotbar').hidden = $('troops').hidden = !session || !mine?.alive;
   if (!session || !mine) return;
   for (const slot of slots) {
     const cost = slot.mode.kind === 'build' ? price(session.game, mine.id, slot.mode.def) : unitCost(session.game, mine.id, slot.mode.unit);
@@ -597,20 +723,43 @@ addEventListener('keydown', (e) => {
   if (!me()?.alive) return;
   const slot = slots.find((s) => s.key === e.key);
   if (slot) toggleSlot(slot);
+  const turn = { q: -10, a: -10, e: 10, d: 10 }[e.key.toLowerCase()];
+  if (turn) setStrength(Number(strength.value) + turn);
 });
-// Right click leaves build and target mode.
+// Right click: out of build or target mode - or the context menu, where the pointer is.
 map.on('contextmenu', (e) => {
-  if (!mode) return;
   e.originalEvent.preventDefault();
-  setMode(null);
+  if (mode) return setMode(null);
+  if (!session || !me()?.alive) return;
+  const { lng, lat } = e.lngLat.wrap();
+  const cell = session.proj.cellAt(lng, lat);
+  if (cell >= 0) openMenu(cell, e.point.x, e.point.y);
 });
+// The middle button drags the map like the left one.
+{
+  const el = map.getCanvasContainer();
+  let grab: { x: number; y: number } | null = null;
+  el.addEventListener('mousedown', (e) => {
+    if (e.button !== 1) return;
+    e.preventDefault();
+    grab = { x: e.clientX, y: e.clientY };
+  });
+  addEventListener('mousemove', (e) => {
+    if (!grab) return;
+    map.panBy([grab.x - e.clientX, grab.y - e.clientY], { animate: false });
+    grab = { x: e.clientX, y: e.clientY };
+  });
+  addEventListener('mouseup', () => (grab = null));
+}
 
-// --- clicks ------------------------------------------------------------------------
+// --- left click: act at once ---------------------------------------------------------
 
 let spawning = false;
 map.on('click', (e) => {
+  // The click that closes the context menu does nothing else.
   if (!session || radial.justDismissed) return;
-  const { game, proj } = session;
+  const s = session;
+  const { game, proj } = s;
   const { lng, lat } = e.lngLat.wrap();
   const cell = proj.cellAt(lng, lat);
   if (cell < 0) return;
@@ -621,7 +770,7 @@ map.on('click', (e) => {
     spawning = true;
     order({ type: 'spawn', cell, nation }, (result) => {
       spawning = false;
-      return result === 'ok' ? 'Klicke auf angrenzendes Land, um es anzugreifen.' : 'Hier ist kein freies Land für ein Startgebiet.';
+      return result === 'ok' ? 'Linksklick auf Nachbarland greift an, Rechtsklick öffnet das Menü.' : 'Hier ist kein freies Land für ein Startgebiet.';
     });
     return;
   }
@@ -634,12 +783,28 @@ map.on('click', (e) => {
     const unit = mode.unit;
     return order({ type: 'launch', unit: unit.id, cell, percent: Number(strength.value) }, (result) => (result === 'ok' ? `${unit.name}: Befehl erteilt.` : refusal(result)));
   }
-  // Free land next door is simply taken; everything else is a choice, so the menu opens at the click.
-  if (game.isFreeLand(cell)) {
-    const percent = Number(strength.value);
-    order({ type: 'attack', target: NEUTRAL, percent }, (result) => (result === 'ok' ? `Vorstoß in freies Land mit ${percent} % deiner Truppen.` : ''));
+  const owner = game.owner[cell];
+  if (owner === mine.id) {
+    // Own land: nothing to attack. A building there is picked out.
+    const b = game.buildingAt.get(cell);
+    s.selected = b ? cell : -1;
+    if (b) toast(`${b.def.icon} ${b.def.name} · ${b.hp}/${b.def.hp} Treffer`);
+    return;
   }
-  openMenu(cell, e.point.x, e.point.y);
+  s.selected = -1;
+  if (game.terrain[cell] === Terrain.WATER) return;
+  const f = game.factions[owner];
+  const percent = Number(strength.value);
+  if (owner === NEUTRAL) return order({ type: 'attack', target: NEUTRAL, percent }, (result) => (result === 'ok' ? `Vorstoß in freies Land mit ${percent} % deiner Truppen.` : ''));
+  // A treaty is not broken by a slip of the finger: that takes the context menu.
+  const treaty = game.diplo.status(game, mine.id, owner);
+  if (treaty === 'Alliance' || treaty === 'NonAggressionPact') {
+    play('refuse');
+    return toast(`Mit ${f.name} gilt: ${STATUS_LABEL[treaty]}. Ein Angriff geht nur über das Rechtsklick-Menü.`);
+  }
+  order({ type: 'attack', target: owner, percent }, (result) =>
+    result === 'ok' ? `Angriff auf ${f.name} mit ${percent} % deiner Truppen.` : 'Das Ziel grenzt nicht an dein Gebiet – Rechtsklick für Schiffe, Luftwaffe und Raketen.',
+  );
 });
 
 map.on('mousemove', (e) => {
@@ -814,6 +979,77 @@ function refreshMenu(): void {
   else radial.refresh();
 }
 
+// --- tutorial: a guided first game ---------------------------------------------------
+
+/** The guided game in progress, if this one is it. */
+let tutorial: Tutorial | null = null;
+/** Where the guide points on the map right now. */
+let tutorialHint: { cell: number; radius: number } | null = null;
+/** Gold the pupil gets, so that no step has to wait for the treasury. */
+const TUTORIAL_GOLD = 2000;
+/** A good place to start on the tutorial map: the Dalmatian coast. */
+const TUTORIAL_START: [number, number] = [16.6, 43.6];
+
+/** Marks a stretch of free coast as the recommended starting area. */
+function prepareTutorial(s: Session): void {
+  const { game, proj } = s;
+  const cell = game.nearest(Math.max(0, proj.cellAt(...TUTORIAL_START)), 40, (c) => game.isFreeLand(c) && game.touchesWater(c));
+  tutorialHint = cell < 0 ? null : { cell, radius: 6 };
+  // Close enough to see single cells: the whole map would make the first nation a speck.
+  if (cell >= 0) map.easeTo({ center: proj.lngLat((cell % game.width) + 0.5, Math.floor(cell / game.width) + 0.5), zoom: Math.min(s.pack.zoom.max, 7.5), duration: 1200 });
+}
+
+/**
+ * Moves the guide on when one of the player's orders completes its step. The tutorial is a game
+ * of one, so it may set the stage directly: gold for the lessons and a weak tribe next door.
+ */
+function watchTutorial(s: Session, cmd: PlayerCommand, result: CommandResult): void {
+  if (!tutorial?.observe(cmd, result)) return;
+  const { game } = s;
+  const mine = s.lockstep.me;
+  tutorialHint = null;
+  if (tutorial.step.id === 'attack' && mine && cmd.type === 'spawn') {
+    mine.gold += TUTORIAL_GOLD;
+    const w = game.width;
+    const far = (c: number) => Math.max(Math.abs((c % w) - (cmd.cell % w)), Math.abs(Math.floor(c / w) - Math.floor(cmd.cell / w)));
+    // Just outside the new nation's own disc, so that the two touch.
+    let tribe: Faction | null = null;
+    for (let d = 5; d <= 14 && !tribe; d++) {
+      const spot = game.nearest(cmd.cell, 20, (c) => far(c) === d && game.isFreeLand(c));
+      if (spot >= 0) tribe = game.addFaction({ name: 'Übungsstamm', type: 'AI_TRIBE' }, spot, 0);
+    }
+    if (tribe) tutorialHint = { cell: Math.round(tribe.sumY / tribe.cells) * w + Math.round(tribe.sumX / tribe.cells), radius: 5 };
+  }
+  play(tutorial.finished ? 'victory' : 'offer');
+  renderGuide();
+}
+
+function renderGuide(): void {
+  const guide = $('guide');
+  guide.hidden = !tutorial || !session;
+  if (!tutorial) {
+    tutorialHint = null;
+    return;
+  }
+  const step = tutorial.step;
+  guide.classList.toggle('finished', tutorial.finished);
+  $('guide-progress').textContent = `Schritt ${tutorial.index + 1}/${TUTORIAL_STEPS.length}`;
+  $('guide-title').textContent = step.title;
+  // The step texts are our own; `**bold**` and `key` marks become elements, everything else stays text.
+  $('guide-text').replaceChildren(
+    ...step.text.split(/(\*\*[^*]+\*\*|`[^`]+`)/).map((part) =>
+      part.startsWith('**') ? Object.assign(document.createElement('b'), { textContent: part.slice(2, -2) }) : part.startsWith('`') ? Object.assign(document.createElement('kbd'), { textContent: part.slice(1, -1) }) : part,
+    ),
+  );
+  $('guide-button').textContent = tutorial.finished ? 'Freies Spiel starten' : 'Tutorial überspringen';
+}
+// Either way the game goes on as a free one.
+$('guide-button').addEventListener('click', () => {
+  tutorial = null;
+  renderGuide();
+  toast('Freies Spiel – viel Erfolg!');
+});
+
 // --- alarms: who is coming for the player, and from where ---------------------------
 
 const alarmButtons = new Map<string, HTMLButtonElement>();
@@ -946,7 +1182,7 @@ function renderHud(): void {
   if (session.lockstep.desynced) {
     session.over = true;
     showBanner('Die Synchronisation mit dem Host ist verloren gegangen – für dich ist dieses Spiel vorbei.');
-  } else if (!mine) showBanner('Wähle dein Startgebiet: Klicke auf freies Land.');
+  } else if (!mine) showBanner(tutorial ? '' : 'Wähle dein Startgebiet: Klicke auf freies Land.');
   else if (!mine.alive) endGame(session, false, mine);
   else if (!game.factions.some((f) => f.alive && f !== mine) || mine.cells >= game.landCells * VICTORY_SHARE) endGame(session, true, mine);
   else showBanner(game.tick === 0 && lobby ? 'Warte auf die Mitspieler – gleich geht es los.' : '');
@@ -1044,9 +1280,9 @@ function frame(now: number): void {
     repaint(session);
   }
   drawLabels(labels, map, session.game, session.proj);
-  drawOverlay(labels, map, session.game, session.proj, { me: me()?.id ?? -1, selected: session.selected, ghost }, now);
+  drawOverlay(labels, map, session.game, session.proj, { me: me()?.id ?? -1, selected: session.selected, ghost, hint: tutorialHint }, now);
 }
 requestAnimationFrame(frame);
 
 // Handle for the browser console and automated browser tests.
-Object.assign(window, { osmFront: { map, mapRegistry, session: () => session && { ...session, me: me() }, lobby: () => lobby, mode: () => mode, ghost: () => ghost, sounds: played } });
+Object.assign(window, { osmFront: { map, mapRegistry, session: () => session && { ...session, me: me() }, lobby: () => lobby, mode: () => mode, ghost: () => ghost, sounds: played, tutorial: () => tutorial && { index: tutorial.index, step: tutorial.step.id, hint: tutorialHint } } });
