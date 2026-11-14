@@ -160,7 +160,8 @@ Gebäudepreise steigen je weiterem Gebäude desselben Typs um die Hälfte des Gr
 **KI-Verhalten (`src/core/ai.ts`):** Standard-Tribes bauen selten einen einzelnen Bunker, Elite-Tribes bis zu fünf
 Bunker/Städte, Nationen arbeiten die Wunschliste `NATION_WISHES` ab, stationieren Jäger, schicken Handels- und
 Kriegsschiffe, landen an feindlichen Küsten bzw. auf freien Inseln und setzen Bomber, Raketen und Nukes gegen
-ihren Kriegsgegner ein.
+ihren Kriegsgegner ein – höchstens ein Schlag je 10 s und ein Atomschlag je 60 s pro Nation, damit ein
+angespartes Vermögen nicht als eine Salve ankommt und SAM-Stellungen nachladen können.
 
 ## 6. Angriffs-Mechaniken
 
@@ -174,15 +175,29 @@ ihren Kriegsgegner ein.
 
 **Bedienung (`src/main.ts`, `src/ui/`):**
 
-- **Linksklick** öffnet am Klickpunkt das Radialmenü (`radial.ts`): auf eigenem Gebiet Bau-Rad, Sammelpunkt und
+- **Linksklick = Sofort-Aktion** (kein Pop-up): Startgebiet wählen; danach Bodenangriff auf angrenzendes freies
+  Land oder die angeklickte Nachbarfraktion mit dem unten eingestellten Truppenanteil. Im Bau-/Zielmodus platziert
+  bzw. feuert er. Auf eigenem Gebiet schließt er Menüs und wählt ein Gebäude an. Besteht ein Pakt oder Bündnis,
+  greift der Linksklick **nicht** an – ein Vertragsbruch geht nur über das Radialmenü.
+- **Rechtsklick** öffnet am Mauszeiger das Radialmenü (`radial.ts`): auf eigenem Gebiet Bau-Rad, Sammelpunkt und
   stationierte Einheiten; auf fremdem Gebiet Bodenangriff, Schiffe, Luftwaffe, Raketen und das Diplomatie-Untermenü;
-  auf Wasser Kriegsschiff und See-Invasion. Die Nabe nennt, worauf der Zeiger steht (Kosten, Hinderungsgrund).
-  Klick daneben oder `ESC` schließt es. Klick auf freies Land stößt zusätzlich sofort vor.
-- **Hotkeys:** `1`–`7` wählen ein Gebäude (Reihenfolge der `buildingRegistry`), `8`/`9` Bomber und Rakete. Im
-  Bau- bzw. Zielmodus führt der nächste Klick den Befehl direkt aus; `ESC` oder Rechtsklick verlässt den Modus.
+  auf Wasser Kriegsschiff und See-Invasion. Im Bau-/Zielmodus bricht er stattdessen den Modus ab.
+- **Truppenanteil:** Regler unten über der Hotkey-Leiste; `Q`/`A` −10 %, `E`/`D` +10 %, Mausrad über dem Regler
+  oder Umschalt + Mausrad ±5 %. Ohne Umschalt zoomt das Mausrad die Karte.
+- **Kamera:** Links-Ziehen oder Mitteltaste-Ziehen verschiebt die Karte; erst unter 5 px Bewegung gilt ein Klick.
+- **Hotkeys:** `1`–`7` wählen ein Gebäude (Reihenfolge der `buildingRegistry`), `8`/`9` Bomber und Rakete;
+  `ESC` oder Rechtsklick verlässt den Modus.
 - **Bau-Ghost:** folgt dem Mauszeiger, zeigt Icon, Radien (Verteidigung, Abfangen, Reichweite der dort
   stationierten Einheiten, Wirkungsradius) und bei Fabriken die Linie zur angeschlossenen Stadt; grün, wenn
   `canBuild()` zustimmt, sonst rot mit Grund am Cursor.
+- **Start-Bildschirm:** drei Schritte über der gedimmten, langsam driftenden Karte – Nations-Kachel mit
+  „Nation anpassen“ (Editor als Dialog), Karten-Kacheln in den Tabs „Welt & Kontinente“, „Regionen & Länder“,
+  „Eigene Karten“ samt vier Schwierigkeits-Knöpfen (bewusst ohne Erklärtext), darunter „Einzelspieler starten“,
+  „Mehrspieler-Lobby“ (Dialog) und „Tutorial spielen“. Eine Kachel wählt nur aus; gestartet wird mit dem Hauptknopf.
+- **Tutorial (`src/ui/tutorial.ts`):** Zustandsautomat ohne DOM mit sechs Schritten (Start, Angriff, Wirtschaft,
+  Diplomatie, Verteidigung, Abschluss). Er sieht das Ergebnis jedes eigenen Kommandos und schaltet nur weiter,
+  wenn die verlangte Aktion wirklich ausgeführt wurde. Läuft auf dem Balkan auf „Leicht“, nur im Einzelspiel;
+  dort darf `main.ts` die Bühne direkt bereiten (Startgold, ein „Übungsstamm“ als Nachbar).
 - **Alarme:** oben mittig je Bedrohung ein Knopf (Bodenoffensive, Landung, Luftangriff, Rakete) mit Richtungspfeil;
   ein Klick zentriert die Karte auf die Front bzw. das Ziel.
 - **Cursor (`cursors.ts`):** `default`, `attack` (angrenzender Gegner), `landing` (fremde Küste bei eigenem Hafen),
@@ -244,17 +259,18 @@ Die Lobby zeigt jeden Spieler mit Flagge, Herrscher- und Nationsnamen.
 | `src/net/` | `lockstep.ts` (Host-Tick), `transport.ts` (trystero / BroadcastChannel), `lobby.ts` (Raum, Host, Namen) |
 | `src/osm/` | Terrain-Ableitung aus OSM-Kacheln und aus PNG-Masken |
 | `src/render/` | Territory-Canvas, Labels, `flag.ts` (Flaggen), `overlay.ts` (Gebäude-Icons, Einheiten, Flugbahnen, Effekte, Fronten, Gefahrenzonen, Bau-Ghost) |
-| `src/ui/` | `nation-editor.ts`, `radial.ts` (Kontextmenü), `cursors.ts`, `sound.ts` (Web-Audio-Effekte), `custom-maps.ts` (Bounding-Box-Formular, JSON-Import/-Export) |
-| `src/main.ts` | Karte, Menü, Lobby, HUD, Radialmenü, Hotkeys, Alarme, Angebote, Eingaben, Spielschleife |
+| `src/ui/` | `nation-editor.ts`, `radial.ts` (Kontextmenü), `cursors.ts`, `sound.ts` (Web-Audio-Effekte), `tutorial.ts` (Zustandsautomat des Tutorials), `custom-maps.ts` (Bounding-Box-Formular, JSON-Import/-Export) |
+| `src/main.ts` | Karte, Start-Bildschirm, Lobby, HUD, Maus- und Tastensteuerung, Radialmenü, Tutorial-Führung, Alarme, Angebote, Spielschleife |
 | `.claude/commands/` | Projekt-Skills: `/verify` (Tests, Build, Browser, Doku, Commit) und `/add-content` (neue Gebäude/Einheiten/Karten) |
 
 Im Browser liegt unter `window.osmFront` ein Handle (`map`, `mapRegistry`, `session()`, `lobby()`) für Konsole und
 Browser-Tests. `session()` liefert u. a. `game`, `proj`, `pack`, `lockstep` und `me` (die eigene Fraktion);
-`mode()` und `ghost()` zeigen Bau-/Zielmodus und Vorschau, `sounds` listet die zuletzt ausgelösten Effekte.
+`mode()` und `ghost()` zeigen Bau-/Zielmodus und Vorschau, `sounds` listet die zuletzt ausgelösten Effekte,
+`tutorial()` den Schritt des laufenden Tutorials.
 
 ## Vorgehensweise
 
-Iterativ in 5 Phasen – **nicht** alles auf einmal ohne Test bauen. Jede Phase wird mit `vitest` und per
+Iterativ in 6 Phasen – **nicht** alles auf einmal ohne Test bauen. Jede Phase wird mit `vitest` und per
 Playwright MCP im echten Browser geprüft, bevor die nächste beginnt.
 
 ### Phase 1 – Fundament (abgeschlossen)
@@ -366,3 +382,30 @@ Bekannte Grenzen nach Phase 5:
 - 60 FPS auf echter Grafikhardware sind nicht gemessen; die Zahlen oben sind Rechenzeit im Hauptthread.
 - Touch-Bedienung ist ungetestet.
 - Das Balancing jenseits der drei Schwierigkeitsgrade ist nicht durch Spieltests abgestimmt.
+
+### Phase 6 – UX-Overhaul: Maus-Steuerung, Start-Bildschirm, Tutorial, „Unmöglich“ (abgeschlossen)
+
+- [x] **Maus-Steuerung umgedreht:** Linksklick handelt sofort, Rechtsklick öffnet das Radialmenü (Abschnitt 6).
+      Truppen-Regler unten mit `Q`/`E`, `A`/`D` und Mausrad; Mitteltaste verschiebt die Karte.
+- [x] **Start-Bildschirm in drei Schritten:** Nations-Kachel mit Editor-Dialog, Karten-Kacheln in drei Tabs,
+      vier Schwierigkeits-Knöpfe ohne Erklärtext, großer Start-Knopf, Mehrspieler-Lobby als Dialog.
+- [x] **Interaktives Tutorial** in sechs Schritten, vom Start-Bildschirm aus; beim ersten Besuch hervorgehoben.
+- [x] **Schwierigkeit „Unmöglich“** (`DIFFICULTY.impossible`, `Level` in `src/core/game.ts`): keine Schonfrist,
+      KI +35 % Wachstum und +40 % Gold, rüstet schon bei 60 % der sonst nötigen Fläche (`armsPct`) und schließt
+      die Reihen (`coalition`): KI-Nationen nähern sich einander an, bieten dem führenden Spieler nichts mehr an,
+      wählen ihn als Beute und richten Raketen, Bomber und Landungen auch ohne Krieg gegen ihn – aber nur, sobald
+      er sie an Fläche überholt hat und kein Vertrag mit ihm besteht. Verträge, Bunker am Engpass und SAM-Stellungen
+      bleiben damit wirksame Gegenmittel.
+- [x] Geprüft mit 90 Vitest-Tests – darunter Headless-Duelle auf „Unmöglich“: wer nur expandiert, verliert;
+      ein Skript mit Handel, Pakt, Bunkern am Gebirgs-Engpass, Städten, SAM und Gegenschlag gewinnt auf drei Seeds;
+      niemand fällt in unter zehn Sekunden – und im Browser: neuer Start-Bildschirm, Sofort-Angriff per Linksklick,
+      Radialmenü per Rechtsklick auf eigenem, fremdem Gebiet und Wasser, alle sechs Tutorial-Schritte, zwei Tabs
+      auf „Unmöglich“ mit gleichem Zustands-Hash.
+
+Bekannte Grenzen nach Phase 6:
+
+- „Am schnellsten wachsender Spieler“ ist als „größter Spieler“ umgesetzt (kein Flächenverlauf je Fraktion).
+- Die Schaffbarkeit von „Unmöglich“ ist an einem Duell-Szenario belegt, nicht an den zwölf Karten durchgespielt.
+  Im Duell überrennt auch „Schwer“ einen Spieler, der nur expandiert; Verträge sind auf engem Raum der Schlüssel.
+- Die Karten-Kacheln zeigen die Lage des Ausschnitts auf einem Gradnetz, kein Vorschaubild der Karte.
+- Rechtsklick-Menü und Mausrad-Regler haben auf Touch-Geräten keine Entsprechung.

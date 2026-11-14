@@ -12,21 +12,24 @@ direkt von Browser zu Browser, ohne Server.
   Gelände kommt aus OSM: Wasser, Städte, Wälder, Gebirge, Autobahnen, Schienen, Eis.
 - **Eigene Nation:** Name, Herrscher, Farben, Flagge aus dem Baukasten und eine Doktrin mit kleinem Bonus.
 - **Gegner:** KI-Nationen, die Wirtschaft, Marine, Luftwaffe und Raketen einsetzen und verhandeln; dazu
-  Stämme und einzelne starke Elite-Stämme. Drei Schwierigkeitsgrade.
+  Stämme und einzelne starke Elite-Stämme. Vier Schwierigkeitsgrade von „Leicht“ bis „Unmöglich“.
 - **Sieben Gebäude, acht Einheiten:** Stadt, Fabrik, Bunker, Hafen, Fliegerhorst, Raketensilo, SAM-Stellung;
   Transporter, Kriegs- und Handelsschiffe, Jäger, Bomber, Fallschirmjäger, Raketen, Atomraketen.
 - **Diplomatie:** Nichtangriffspakt, Bündnis, Handel, Hilfslieferungen, Embargo – auch mit Stämmen.
+- **Tutorial:** ein geführtes erstes Spiel in sechs Schritten, direkt vom Startbildschirm.
 - **Mehrspieler:** „Raum erstellen“, Link verschicken, losspielen. Peer-to-Peer über WebRTC.
 
 ## Steuerung
 
 | Eingabe | Wirkung |
 | --- | --- |
-| Klick auf freies Land | Startgebiet wählen, danach ausbreiten |
-| Linksklick | Menü am Klickpunkt: bauen, angreifen, Schiffe, Luftwaffe, Raketen, Diplomatie |
-| `1`–`7` | Gebäude wählen – die Vorschau zeigt Reichweite und ob der Platz taugt |
-| `8`, `9` | Bomber und Rakete zielen |
-| `Esc`, Rechtsklick | Menü schließen, Modus verlassen |
+| Linksklick | Startgebiet wählen; danach Sofort-Angriff auf angrenzendes freies Land oder eine Nachbarfraktion |
+| Rechtsklick | Radialmenü am Mauszeiger: bauen, Schiffe, Luftwaffe, Raketen, Diplomatie |
+| Regler unten, `Q`/`E`, `A`/`D`, Umschalt + Mausrad | Truppenanteil für Angriffe |
+| Ziehen (links oder Mitteltaste) | Karte verschieben |
+| `1`–`7` | Gebäude wählen – die Vorschau zeigt Reichweite und ob der Platz taugt; Linksklick baut |
+| `8`, `9` | Bomber und Rakete zielen; Linksklick feuert |
+| `Esc`, Rechtsklick | Bau- oder Zielmodus verlassen, Menü schließen |
 | `M`, `H` | Ton aus/an, Hilfe |
 
 Gewonnen hat, wer 80 % der Landfläche hält oder als Letzter übrig ist.
