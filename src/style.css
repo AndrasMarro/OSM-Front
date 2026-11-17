@@ -407,18 +407,57 @@ dialog #nation-form fieldset {
 #nation-form .wide {
   grid-column: 1 / -1;
 }
-#controls {
+#hover {
+  min-height: 1.4em;
+  padding: 6px 12px;
+  color: #b8c2cf;
+  font-size: 0.9em;
+}
+#top .bar {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+#game-menu {
+  position: relative;
+  padding: 0;
+}
+#game-menu[hidden] {
+  display: none;
+}
+#game-menu summary {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  cursor: pointer;
+  font-size: 1.2em;
+  list-style: none;
+}
+#game-menu summary::-webkit-details-marker {
+  display: none;
+}
+#game-menu[open] summary {
+  color: #7db4ff;
+}
+#game-menu .drop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
   display: grid;
   gap: 6px;
+  width: 220px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgb(16 20 26 / 96%);
+  box-shadow: 0 4px 18px rgb(0 0 0 / 50%);
 }
-#controls label {
+#game-menu label {
   display: flex;
   justify-content: space-between;
 }
-#hover {
-  min-height: 2.8em;
-  margin: 0;
-  color: #b8c2cf;
+#game-menu button {
+  text-align: left;
 }
 #banner,
 #toast {

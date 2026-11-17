@@ -1,5 +1,5 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
-import { CITY_TIERS } from '../core/buildings';
+import { CITY_TIERS, MAX_LEVEL, supplyRadius } from '../core/buildings';
 import { NEUTRAL, RALLY_RADIUS, type Attack, type Game, type GameEvent } from '../core/game';
 import type { GridProjection } from '../core/maps/projection';
 import type { Unit } from '../core/units';
@@ -24,6 +24,7 @@ const EFFECT_COLOR: Record<GameEvent['type'], string> = {
   intercept: '90 220 255',
   landing: '120 230 130',
   repelled: '255 90 60',
+  captured: '255 212 94',
 };
 
 /** What would be built or hit at the cursor: a preview that follows the mouse. */
@@ -208,6 +209,25 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, gam
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
+  // Supply lines: each factory to the buildings it serves - bright for the player's own, faint for others.
+  if (cellPx >= DOT_BELOW_CELL_PX) {
+    ctx.setLineDash([3, 4]);
+    ctx.lineDashOffset = -(now / 80) % 7;
+    for (const b of game.buildings) {
+      if (b.supplier < 0) continue;
+      const p = ofCell(b.cell);
+      const q = ofCell(b.supplier);
+      if (!visible(p, 300) && !visible(q, 300)) continue;
+      ctx.beginPath();
+      ctx.moveTo(q.x, q.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.lineWidth = b.owner === me ? 2 : 1;
+      ctx.strokeStyle = b.owner === me ? 'rgb(255 212 94 / 80%)' : 'rgb(255 255 255 / 25%)';
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
+
   // Buildings: a badge in the owner's colour - or, seen from far away where badges would only
   // pile up, a dot.
   if (cellPx < DOT_BELOW_CELL_PX) {
@@ -226,6 +246,42 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, gam
       if (!visible(p)) continue;
       const sprite = badge(b.def.icon, rgb(b.owner), size);
       ctx.drawImage(sprite, p.x - sprite.width / (2 * SPRITE_SCALE), p.y - sprite.height / (2 * SPRITE_SCALE), sprite.width / SPRITE_SCALE, sprite.height / SPRITE_SCALE);
+      const half = sprite.width / (2 * SPRITE_SCALE);
+      // Its level as pips under the badge, gold at the top level.
+      if (b.level > 1) {
+        for (let i = 0; i < b.level; i++) {
+          ctx.beginPath();
+          ctx.arc(p.x + (i - (b.level - 1) / 2) * 6, p.y + half + 2, 2.2, 0, Math.PI * 2);
+          ctx.fillStyle = b.level === MAX_LEVEL ? '#ffd45e' : '#fff';
+          ctx.fill();
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = 'rgb(0 0 0 / 70%)';
+          ctx.stroke();
+        }
+      }
+      // Still being set up (a SAM battery): an arc that closes as it gets ready.
+      if (b.def.arming && b.armedAt > game.tick) {
+        const left = (b.armedAt - game.tick) / b.def.arming;
+        {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, half + 2, -Math.PI / 2, -Math.PI / 2 + (1 - left) * Math.PI * 2);
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = '#7db4ff';
+          ctx.stroke();
+          if (b.owner === me) caption(`aktiv in ${Math.ceil((b.armedAt - game.tick) / 10)} s`, p.x, p.y - half - 8, '#7db4ff', 10);
+        }
+      }
+      // A magazine: shots ready, out of how many.
+      if (b.def.magazine && b.owner === me) caption(b.charges > 0 ? `${'▮'.repeat(b.charges)}${'▯'.repeat(b.level - b.charges)}` : `lädt ${Math.ceil((b.readyAt - game.tick) / 10)} s`, p.x, p.y - half - 8, b.charges > 0 ? '#ffd45e' : '#ff8a7a', 10);
+      // A factory's reach, for the player's own.
+      if (b.def.supply && b.owner === me && cellPx >= 3) {
+        ring(p, supplyRadius(b) * cellPx);
+        ctx.setLineDash([2, 6]);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgb(255 212 94 / 35%)';
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
       // A city that has merged with a real one carries its name.
       if (b.city && cellPx >= 3) caption(`🏙️ ${b.city.name} (${CITY_TIERS[b.city.tier].label})`, p.x, p.y + size + 4, '#fff', 11);
     }
@@ -251,6 +307,8 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, gam
     if (!visible(p, 200) && !visible(end, 200)) continue;
     const color = rgb(u.owner);
     let ahead = end;
+    // Trade ships are many and go about their business: no route for them.
+    const quiet = !!u.def.trade;
     ctx.beginPath();
     ctx.moveTo(p.x, p.y);
     if (u.path) {
@@ -262,15 +320,17 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, gam
       }
     }
     ctx.lineTo(end.x, end.y);
-    ctx.setLineDash([6, 5]);
-    ctx.lineDashOffset = -(now / 45) % 11;
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = 'rgb(0 0 0 / 45%)';
-    ctx.stroke();
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = `rgb(${color})`;
-    ctx.stroke();
-    ctx.setLineDash([]);
+    if (!quiet) {
+      ctx.setLineDash([6, 5]);
+      ctx.lineDashOffset = -(now / 45) % 11;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgb(0 0 0 / 45%)';
+      ctx.stroke();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = `rgb(${color})`;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     if (!u.path) {
       // Where it will come down.
       ctx.beginPath();
@@ -282,6 +342,13 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, gam
     ctx.save();
     ctx.translate(p.x, p.y);
     if (ahead.x !== p.x || ahead.y !== p.y) ctx.rotate(Math.atan2(ahead.y - p.y, ahead.x - p.x));
+    // Trade ships are small; a warship grows with every level it has earned.
+    const scale = quiet ? 0.65 : 1 + (u.level - 1) * 0.22;
+    ctx.scale(scale, scale);
+    if (u.level > 1) {
+      ctx.shadowColor = u.level >= 4 ? '#ffd45e' : '#fff';
+      ctx.shadowBlur = 4 + 3 * u.level;
+    }
     ctx.beginPath();
     for (let i = 0; i < shape.length; i += 2) ctx.lineTo(shape[i], shape[i + 1]);
     ctx.closePath();
@@ -291,6 +358,8 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, gam
     ctx.strokeStyle = '#fff';
     ctx.stroke();
     ctx.restore();
+    // A veteran warship wears its rank: one chevron per level above the first.
+    if (u.level > 1) caption('^'.repeat(u.level - 1), p.x, p.y - 12 - u.level * 2, u.level >= 4 ? '#ffd45e' : '#fff', 12);
     if (u.troops > 0) {
       ctx.font = '600 11px system-ui, sans-serif';
       ctx.lineWidth = 3;

@@ -1,7 +1,7 @@
 import { Map as MapLibreMap, setWorkerUrl, type CanvasSource, type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
-import { buildingRegistry, canBuild, CITY_TIERS, linkedCity, price, type BuildingDefinition, type OrderResult } from './core/buildings';
+import { buildingRegistry, canBuild, canUpgrade, CITY_TIERS, linkedCity, MAX_LEVEL, price, upgradeCost, type Building, type BuildingDefinition, type OrderResult } from './core/buildings';
 import type { CommandResult } from './core/commands';
 import type { DiplomaticStatus, Treaty } from './core/diplomacy';
 import type { Faction } from './core/faction';
@@ -49,9 +49,11 @@ const REFUSAL: Record<Exclude<OrderResult, 'ok'>, string> = {
   range: 'Außer Reichweite, oder es gibt keinen Seeweg dorthin.',
   target: 'Das ist kein gültiges Ziel.',
   troops: 'Dafür hast du keine Truppen übrig.',
+  reload: 'Das Raketensilo lädt nach.',
+  level: 'Das Gebäude hat schon die höchste Stufe.',
 };
 /** The same reasons, short enough to hang on the cursor while placing a building. */
-const BUILD_HINT: Partial<Record<OrderResult, string>> = { place: 'Nicht dein Gebiet', spacing: 'Zu nah am nächsten Gebäude', coast: 'Kein Küstenfeld', gold: 'Zu wenig Gold' };
+const BUILD_HINT: Partial<Record<OrderResult, string>> = { place: 'Nicht dein Gebiet', spacing: 'Zu nah am nächsten Gebäude', coast: 'Kein Küstenfeld', gold: 'Zu wenig Gold', level: 'Höchste Stufe erreicht' };
 /** Gold in one gift. */
 const GOLD_GIFT = 100;
 /** Units that get a key of their own (after the buildings) to aim them straight at the map. */
@@ -173,7 +175,7 @@ showDifficulty();
 
 /** What a successful order sounds like, by kind; anything else gets the plain confirmation. */
 const ORDER_SOUND: Partial<Record<PlayerCommand['type'], Sound>> = { build: 'build', attack: 'attack', spawn: 'build' };
-const EVENT_SOUND: Record<GameEvent['type'], Sound> = { explosion: 'explosion', nuke: 'nuke', intercept: 'intercept', landing: 'landing', repelled: 'hit', hit: 'hit', sunk: 'explosion' };
+const EVENT_SOUND: Record<GameEvent['type'], Sound> = { explosion: 'explosion', nuke: 'nuke', intercept: 'intercept', landing: 'landing', repelled: 'hit', hit: 'hit', sunk: 'explosion', captured: 'offer' };
 
 const volumeSlider = $<HTMLInputElement>('volume');
 /** The volume before muting, to come back to. */
@@ -276,7 +278,8 @@ function showMenu(): void {
   hud.hidden = true;
   $('hover').textContent = ' ';
   $('offers').hidden = true;
-  $('hotbar').hidden = $('troops').hidden = $('speed').hidden = $('ranking').hidden = true;
+  $('hotbar').hidden = $('troops').hidden = $('speed').hidden = $('ranking').hidden = $('game-menu').hidden = true;
+  $<HTMLDetailsElement>('game-menu').open = false;
   $('alarms').replaceChildren();
   alarmButtons.clear();
   radial.close();
@@ -495,6 +498,12 @@ if (!localStorage.getItem('osm-front:seen-help')) {
 }
 
 $('to-menu').addEventListener('click', showMenu);
+// The game menu closes after a pick, and when the player clicks anywhere else.
+for (const id of ['help-open', 'export-map']) $(id).addEventListener('click', () => ($<HTMLDetailsElement>('game-menu').open = false));
+addEventListener('pointerdown', (e) => {
+  const gm = $<HTMLDetailsElement>('game-menu');
+  if (gm.open && !gm.contains(e.target as Node)) gm.open = false;
+});
 $('export-map').addEventListener('click', () => {
   if (session) exportPack(session.pack, session.game.terrain, session.proj.width, session.proj.height);
 });
@@ -641,6 +650,10 @@ const basesFor = (game: Game, owner: number, unit: UnitDefinition) => game.build
 function launchProblem(game: Game, mine: Faction, unit: UnitDefinition, cell: number): string {
   const bases = basesFor(game, mine.id, unit);
   if (bases.length === 0) return `Braucht ${buildingRegistry.get(unit.base)?.name}`;
+  if (!bases.some((b) => !b.def.magazine || b.charges > 0)) {
+    const ready = Math.min(...bases.map((b) => b.readyAt)) - game.tick;
+    return `Lädt nach (${Math.max(1, Math.ceil(ready / TICKS_PER_SECOND))} s)`;
+  }
   if (unit.domain !== 'sea') {
     if (game.terrain[cell] === Terrain.WATER || game.owner[cell] === mine.id) return 'Kein gültiges Ziel';
     if (!bases.some((b) => distance(game, b.cell, cell) <= unit.range)) return 'Außer Reichweite';
@@ -649,6 +662,26 @@ function launchProblem(game: Game, mine: Faction, unit: UnitDefinition, cell: nu
 }
 
 /** The preview that follows the mouse in build or target mode: what, how far it reaches, and whether it works here. */
+/** The player's building on or right next to a cell: badges are bigger than one cell. */
+function buildingNear(game: Game, owner: number, cell: number): Building | undefined {
+  const at = game.nearest(cell, 1, (c) => game.buildingAt.get(c)?.owner === owner);
+  return at < 0 ? undefined : game.buildingAt.get(at);
+}
+
+/** What a building does at a level, for previews and the hover line. */
+function describe(b: Building | null, def: BuildingDefinition, level: number): string[] {
+  const parts: string[] = [];
+  const k = 1 + (level - 1) / 2;
+  if (def.capacity) parts.push(`+${Math.round(def.capacity * k)} Bevölkerung`);
+  if (def.income) parts.push(`${(def.income * k).toFixed(1)} Gold/Tick`);
+  if (def.fort) parts.push(`Radius ${def.fort.radius + level - 1}`);
+  if (def.intercept) parts.push(`Abfangradius ${Math.round((def.intercept.radius * (3 + level)) / 4)}`);
+  if (def.magazine) parts.push(`${level} ${level === 1 ? 'Schuss' : 'Schüsse'} je Ladung`);
+  if (def.supply) parts.push(`versorgt im Umkreis ${def.supply.radius + 2 * (level - 1)}`);
+  if (b && b.supplier >= 0) parts.push(`versorgt: +${b.boost} %`);
+  return parts;
+}
+
 function updateGhost(): void {
   const mine = me();
   ghost = null;
@@ -662,10 +695,24 @@ function updateGhost(): void {
     return;
   }
   const def = mode.def;
+  // On one of the player's own buildings of this kind, the next click upgrades it.
+  const own = buildingNear(game, mine.id, hoverCell);
+  if (own && own.def === def) {
+    const result = canUpgrade(game, mine.id, own.cell);
+    const next = Math.min(MAX_LEVEL, own.level + 1);
+    const rings: Ghost['rings'] = [];
+    if (def.intercept) rings.push({ radius: (def.intercept.radius * (3 + next)) / 4, label: `Abfangradius Stufe ${next}` });
+    if (def.fort) rings.push({ radius: def.fort.radius + next - 1, label: `Verteidigung Stufe ${next}` });
+    if (def.supply) rings.push({ radius: def.supply.radius + 2 * (next - 1), label: `Versorgung Stufe ${next}` });
+    const hint = result === 'ok' ? `⬆ Stufe ${next}: ${Math.ceil(upgradeCost(own))} Gold · ${describe(null, def, next).join(', ')}` : result === 'level' ? 'Höchste Stufe erreicht' : `⬆ Stufe ${next}: zu wenig Gold (${Math.ceil(upgradeCost(own))})`;
+    ghost = { cell: own.cell, icon: '⬆', ok: result === 'ok', hint, rings, links: [] };
+    return;
+  }
   const result = canBuild(game, mine.id, def.id, hoverCell);
   const rings: Ghost['rings'] = [];
+  if (def.supply) rings.push({ radius: def.supply.radius, label: `Versorgt Gebäude: +${def.supply.pct} %` });
   if (def.fort) rings.push({ radius: def.fort.radius, label: `Verteidigung +${def.fort.defensePct} %` });
-  if (def.intercept) rings.push({ radius: def.intercept.radius, label: 'Abfangradius' });
+  if (def.intercept) rings.push({ radius: def.intercept.radius, label: def.arming ? `Abfangradius · aktiv nach ${def.arming / TICKS_PER_SECOND} s` : 'Abfangradius' });
   // What the units based here would cover.
   for (const u of unitRegistry.list()) {
     if (u.base !== def.id) continue;
@@ -835,7 +882,7 @@ function setSpeed(speed: number): void {
 }
 function refreshSpeed(): void {
   const ls = session?.lockstep;
-  $('speed').hidden = !ls || !menu.hidden;
+  $('speed').hidden = $('game-menu').hidden = !ls || !menu.hidden;
   if (!ls) return;
   for (const b of speedButtons) {
     const pressed = `${Number(b.dataset.speed) === ls.speed}`;
@@ -908,6 +955,8 @@ map.on('click', (e) => {
   if (!mine.alive) return;
   if (mode?.kind === 'build') {
     const def = mode.def;
+    const own = buildingNear(game, mine.id, cell);
+    if (own && own.def === def) return order({ type: 'upgrade', cell: own.cell }, (result) => (result === 'ok' ? `${def.name} auf Stufe ${own.level} ausgebaut.` : refusal(result)));
     return order({ type: 'build', def: def.id, cell }, (result) => {
       const city = s.game.buildingAt.get(cell)?.city;
       return result !== 'ok' ? refusal(result) : city ? `🏙️ ${city.name} (${CITY_TIERS[city.tier].label}): ${cityBonus(city)}.` : `${def.name} gebaut.`;
@@ -920,9 +969,9 @@ map.on('click', (e) => {
   const owner = game.owner[cell];
   if (owner === mine.id) {
     // Own land: nothing to attack. A building there is picked out.
-    const b = game.buildingAt.get(cell);
-    s.selected = b ? cell : -1;
-    if (b) toast(`${b.def.icon} ${b.def.name} · ${b.hp}/${b.def.hp} Treffer`);
+    const b = buildingNear(game, mine.id, cell);
+    s.selected = b ? b.cell : -1;
+    if (b) toast(`${b.def.icon} ${b.def.name} · Stufe ${b.level} · ${b.hp}/${b.def.hp + b.level - 1} Treffer${describe(b, b.def, b.level).length ? ` · ${describe(b, b.def, b.level).join(', ')}` : ''} – Rechtsklick zum Ausbauen`);
     return;
   }
   s.selected = -1;
@@ -957,7 +1006,7 @@ map.on('mousemove', (e) => {
     const f = game.factions[game.owner[cell]];
     const who = f.id === NEUTRAL ? (isLand(game.terrain[cell]) ? 'Freies Land · ' : '') : `${f.nation ? `${f.nation.ruler} von ${f.name}` : `${factionIcon(f)} ${f.name}`} (${kindLabel(f)}) · ${formatTroops(f.troops)} Truppen · `;
     const b = game.buildingAt.get(cell);
-    hover.textContent = `${who}${TERRAIN_LABEL[game.terrain[cell]]}${b ? ` · ${b.def.icon} ${b.city ? `${b.city.name} (${CITY_TIERS[b.city.tier].label})` : b.def.name}` : ''}${game.fallout[cell] > game.tick ? ' · verstrahlt' : ''}`;
+    hover.textContent = `${who}${TERRAIN_LABEL[game.terrain[cell]]}${b ? ` · ${b.def.icon} ${b.city ? `${b.city.name} (${CITY_TIERS[b.city.tier].label})` : b.def.name} Stufe ${b.level}${b.armedAt > game.tick ? ` (aktiv in ${Math.ceil((b.armedAt - game.tick) / TICKS_PER_SECOND)} s)` : ''}${b.supplier >= 0 ? ' · versorgt' : ''}` : ''}${game.fallout[cell] > game.tick ? ' · verstrahlt' : ''}`;
   }
 });
 map.on('mouseout', () => {
@@ -999,11 +1048,19 @@ function openMenu(cell: number, x: number, y: number): void {
       }),
   });
 
+  const target = owner === mine.id ? buildingNear(game, mine.id, cell) : undefined;
+  const upgradeItem = (b: Building): RadialItem => ({
+    icon: '⬆',
+    label: b.level >= MAX_LEVEL ? `${b.def.name}: höchste Stufe` : `${b.def.name} ausbauen (Stufe ${b.level + 1})`,
+    hint: () => (b.level >= MAX_LEVEL ? describe(b, b.def, b.level).join('\n') : `${Math.ceil(upgradeCost(b))} Gold\n${describe(null, b.def, b.level + 1).join('\n')}`),
+    enabled: () => canUpgrade(game, mine.id, b.cell) === 'ok',
+    run: () => order({ type: 'upgrade', cell: b.cell }, (result) => (result === 'ok' ? `${b.def.name} auf Stufe ${b.level} ausgebaut.` : refusal(result))),
+  });
   let spec: RadialSpec;
   if (owner === mine.id) {
     spec = {
-      title: 'Dein Gebiet',
-      info: () => `${TERRAIN_LABEL[game.terrain[cell]]}${game.touchesWater(cell) ? ' · Küste' : ''}`,
+      title: target ? `${target.def.icon} ${target.def.name} · Stufe ${target.level}` : 'Dein Gebiet',
+      info: () => (target ? describe(target, target.def, target.level).join('\n') : `${TERRAIN_LABEL[game.terrain[cell]]}${game.touchesWater(cell) ? ' · Küste' : ''}`),
       items: [
         ...buildingRegistry.list().map((def): RadialItem => {
           const problem = () => canBuild(game, mine.id, def.id, cell);
@@ -1015,6 +1072,8 @@ function openMenu(cell: number, x: number, y: number): void {
             run: () => order({ type: 'build', def: def.id, cell }, (result) => (result === 'ok' ? `${def.name} gebaut.` : refusal(result))),
           };
         }),
+        // The building under the pointer can be upgraded from here.
+        ...(target ? [upgradeItem(target)] : []),
         {
           icon: '⚑',
           label: 'Sammelpunkt',
@@ -1022,7 +1081,7 @@ function openMenu(cell: number, x: number, y: number): void {
           run: () => order({ type: 'rally', cell }, (result) => (result === 'ok' ? 'Sammelpunkt gesetzt.' : refusal(result))),
         },
         // Units that need no target: they stay at their base or find their own route.
-        ...unitRegistry.list().filter((u) => u.intercept || u.trade).map(unitItem),
+        ...unitRegistry.list().filter((u) => u.intercept && !u.auto).map(unitItem),
       ],
     };
   } else {
@@ -1090,7 +1149,7 @@ function openMenu(cell: number, x: number, y: number): void {
       });
     }
     // Open water is a destination for ships only: a patrol, or an invasion of the nearest shore.
-    for (const unit of unitRegistry.list()) if (!unit.intercept && !unit.trade && (!water || unit.domain === 'sea')) items.push(unitItem(unit));
+    for (const unit of unitRegistry.list()) if (!unit.intercept && !unit.auto && (!water || unit.domain === 'sea')) items.push(unitItem(unit));
     if (owner !== NEUTRAL) items.push({ icon: '✉', label: 'Diplomatie', hint: () => 'Handel, Bündnis, Hilfe', stays: true, run: () => radial.open(x, y, diplomacy()) });
     spec = {
       title: water ? 'Gewässer' : owner === NEUTRAL ? 'Freies Land' : f.name,

@@ -15,21 +15,26 @@
     <div id="hud" hidden>
       <section id="stats" class="panel" aria-label="Dein Reich"></section>
       <section id="offers" class="panel" aria-label="Diplomatische Angebote" hidden></section>
-      <section id="controls" class="panel">
-        <p id="hover">&nbsp;</p>
-        <label for="volume">Lautstärke <output id="volume-value" for="volume"></output></label>
-        <input id="volume" type="range" min="0" max="100" step="5" />
-        <button id="help-open" type="button">Hilfe (H)</button>
-        <button id="export-map" type="button">Karte exportieren</button>
-        <button id="to-menu" type="button">Karte wechseln</button>
-      </section>
+      <p id="hover" class="panel">&nbsp;</p>
     </div>
     <details id="ranking" class="panel" open hidden>
       <summary>Rangliste <small>Land · Truppen · Gold</small></summary>
       <div id="leaderboard" aria-label="Rangliste nach Landanteil"></div>
     </details>
     <div id="top">
-      <nav id="speed" class="panel" aria-label="Spieltempo" hidden></nav>
+      <div class="bar">
+        <nav id="speed" class="panel" aria-label="Spieltempo" hidden></nav>
+        <details id="game-menu" class="panel" hidden>
+          <summary aria-label="Menü" title="Menü">☰</summary>
+          <div class="drop">
+            <label for="volume">🔊 Lautstärke <output id="volume-value" for="volume"></output></label>
+            <input id="volume" type="range" min="0" max="100" step="5" />
+            <button id="help-open" type="button">❔ Hilfe <kbd>H</kbd></button>
+            <button id="export-map" type="button">💾 Karte exportieren</button>
+            <button id="to-menu" type="button">🏠 Zum Startmenü</button>
+          </div>
+        </details>
+      </div>
       <section id="guide" class="panel" aria-label="Tutorial" aria-live="polite" hidden>
         <small id="guide-progress"></small>
         <strong id="guide-title"></strong>
@@ -195,7 +200,11 @@
         <dt>Echte Städte</dt>
         <dd>Mit <kbd>1</kbd> zeigen pulsierende Marker echte Städte: eine Stadt dort übernimmt Namen und Bonus.</dd>
         <dt><kbd>1</kbd>–<kbd>7</kbd></dt>
-        <dd>Gebäude wählen; die Vorschau unter der Maus zeigt Reichweite und ob der Platz taugt. Linksklick baut.</dd>
+        <dd>Gebäude wählen; die Vorschau unter der Maus zeigt Reichweite und ob der Platz taugt. Linksklick baut – auf ein eigenes Gebäude derselben Art baut er es aus (Stufe 1–4, auch per Rechtsklick).</dd>
+        <dt>Stufen</dt>
+        <dd>Mehr Wirkung und Reichweite je Stufe. Ein Raketensilo schießt so oft wie seine Stufe und lädt dann nach; eine SAM-Stellung braucht nach dem Bau 15 s. Fabriken versorgen Gebäude im Umkreis (+25 %), sichtbar als goldene Linien.</dd>
+        <dt>Seehandel</dt>
+        <dd>Häfen schicken von selbst Handelsschiffe zu fremden Häfen. Kriegsschiffe kapern feindliche Handelsschiffe und steigen auf, wenn sie Kriegsschiffe versenken.</dd>
         <dt><kbd>8</kbd> <kbd>9</kbd></dt>
         <dd>Bomber und Rakete zielen: der nächste Linksklick feuert.</dd>
         <dt><kbd>Esc</kbd> / Rechtsklick</dt>
@@ -205,7 +214,7 @@
         <dt>Warnungen</dt>
         <dd>Rote Meldungen oben zeigen Angriffe auf dich. Ein Klick springt zum Ort des Geschehens.</dd>
         <dt><kbd>M</kbd> · <kbd>H</kbd></dt>
-        <dd>Ton aus/an · diese Hilfe.</dd>
+        <dd>Ton aus/an · diese Hilfe. Lautstärke, Export und Startmenü stecken oben im ☰-Menü.</dd>
       </dl>
       <p>Du gewinnst mit 80&nbsp;% der Landfläche – oder wenn niemand sonst übrig ist.</p>
       <form method="dialog"><button>Los geht’s</button></form>
