@@ -16,6 +16,8 @@ direkt von Browser zu Browser, ohne Server.
 - **Sieben Gebäude, acht Einheiten:** Stadt, Fabrik, Bunker, Hafen, Fliegerhorst, Raketensilo, SAM-Stellung;
   Transporter, Kriegs- und Handelsschiffe, Jäger, Bomber, Fallschirmjäger, Raketen, Atomraketen.
 - **Diplomatie:** Nichtangriffspakt, Bündnis, Handel, Hilfslieferungen, Embargo – auch mit Stämmen.
+- **Gebäude-Stufen:** Ausbau bis Stufe 4, Fabriken versorgen ihr Umland, Silos mit Magazin, SAM mit Anlaufzeit.
+- **Seehandel:** Häfen schicken Handelsschiffe von selbst; Kriegsschiffe kapern sie und steigen im Gefecht auf.
 - **Echte Grenzen und Städte:** Länderkarten enden an den echten Staatsgrenzen; eine Stadt auf einer echten
   Metropole übernimmt deren Namen und Bonus.
 - **Flaggen-Bibliothek:** über hundert heutige Staaten und historische Reiche als Vorlage für die eigene Nation.
@@ -32,7 +34,7 @@ direkt von Browser zu Browser, ohne Server.
 | `W` `A` `S` `D`, Pfeiltasten | Kamera verschieben |
 | Leertaste, `+`/`-` | Pause, Spieltempo 0.5x bis 4x (im Mehrspieler der Host) |
 | Ziehen (links oder Mitteltaste) | Karte verschieben |
-| `1`–`7` | Gebäude wählen – die Vorschau zeigt Reichweite und ob der Platz taugt; Linksklick baut |
+| `1`–`7` | Gebäude wählen – die Vorschau zeigt Reichweite und ob der Platz taugt; Linksklick baut, auf ein eigenes Gebäude derselben Art baut er es aus |
 | `8`, `9` | Bomber und Rakete zielen; Linksklick feuert |
 | `Esc`, Rechtsklick | Bau- oder Zielmodus verlassen, Menü schließen |
 | `M`, `H` | Ton aus/an, Hilfe |

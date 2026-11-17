@@ -152,7 +152,7 @@ jederzeit per Konfiguration hinzukommen können.
 | `City` | Versorgungszentrum: erhöht Max-Pop und Wachstum | – |
 | `Factory` | Generiert Gold/Einkommen; aufrüstbar für vernetzte Logistik-Boni entlang von OSM-Straßen/Schienen | – |
 | `Bunker` / `DefensePost` | Verlangsamt feindliches Zellen-Fluten im Radius drastisch | – |
-| `Port` | Muss an `WATER` grenzen; ermöglicht Marine | `Warship` (Küstenbombardierung, Seeherrschaft), `TransportShip` (amphibische Landungen), `TradeShip` (passives Gold mit verbündeten/neutralen Häfen) |
+| `Port` | Muss an `WATER` grenzen; ermöglicht Marine und schickt von selbst Handelsschiffe | `Warship` (Küstenbombardierung, Seeherrschaft, Kapern), `TransportShip` (amphibische Landungen), `TradeShip` (automatisch, nicht käuflich) |
 | `Airfield` | Fliegerhorst; ermöglicht Luftwaffe | `Fighter` (Luftraumüberwachung/Abfangen), `Bomber` (taktische Schläge gegen Gebäude/Fabriken), `Paratrooper` (Luftlandungen hinter feindlichen Linien) |
 | `MissileSilo` | Marschflugkörper/Nukes: neutralisieren Zellen und zerstören Gebäude | – |
 | `SAMSite` | Fängt feindliche Raketen und Bomber im Radius ab | – |
@@ -170,15 +170,24 @@ liest optionale Felder der Definition – ein neuer Typ ist ein `register({...})
 | `intercept` | schießt fliegende Einheiten im Radius ab, mit Nachladezeit | `SAMSite`: Radius 14, 8 s, 100 %; `Fighter`: Radius 18, 6 s, 60 % |
 | `carriesTroops` | landet den gewählten Truppenanteil am Ziel an | `TransportShip`, `Paratrooper` (Reichweite 70) |
 | `blast` | Gebäudeschaden, Truppenverlust, optional Neutralisierung + 60 s Verstrahlung | `Bomber`, `Missile`, `Nuke` (Radius 12) |
-| `guns` | Patrouille: beschießt feindliche Schiffe und Küsten | `Warship` |
-| `trade` | pendelt zum nächsten fremden Hafen, Gold an beide Enden | `TradeShip` |
+| `guns` | Patrouille: beschießt feindliche Schiffe und Küsten; kapert feindliche (Krieg oder Embargo) Handelsschiffe samt Ladung und ruht danach `captureCooldown` Ticks; jedes versenkte Kriegsschiff hebt die Stufe (bis `maxLevel`, je `hpPerLevel` Trefferpunkte mehr) | `Warship`: 10 s Ruhe, Stufe 4, +2 |
+| `trade` | fährt zum nächsten fremden Hafen (kein Krieg, kein Embargo), Gold an beide Enden, dann ist die Fahrt vorbei | `TradeShip` |
+| `arming` | Ticks nach dem Bau, bis es wirkt | `SAMSite`: 150 (15 s) |
+| `magazine` | Schüsse je Ladung = Stufe; `reload` Ticks nach dem ersten Schuss einer vollen Ladung ist sie wieder voll | `MissileSilo`: 300 |
+| `supply` | versorgt eigene Gebäude im Radius (+2 je Stufe): Wirkung +`pct` %, Nachlade- und Abklingzeiten entsprechend kürzer; Linie auf der Karte | `Factory`: Radius 10, +25 % |
+| `auto` (Einheit) | nicht käuflich; die Basis schickt alle `every` / Stufe Ticks eine los, höchstens Stufe viele gleichzeitig | `TradeShip`: 200 |
 | `settles` | verschmilzt mit einer echten Stadt auf oder neben dem Bauplatz (2 Zellen): Name und Bonus nach Stufe – 1: +50 % Wachstum, +30 % Gold; 2: +30 %, +15 %; 3: +15 % (`CITY_TIERS`) | `City` |
+
+**Stufen (`upgrade`-Kommando, `MAX_LEVEL` = 4):** Ausbau kostet Grundpreis × aktuelle Stufe. Je Stufe: Kapazität,
+Wachstum und Einkommen +50 %, Bunker-Radius +1, Abfangradius +25 % (`reach()`), Fabrik-Versorgung +2 Zellen, ein
+Trefferpunkt und – beim Silo – ein Schuss mehr. KI-Nationen bauen aus, wenn ihre Wunschliste erfüllt ist und sie das
+Doppelte des Preises haben.
 
 Gebäudepreise steigen je weiterem Gebäude desselben Typs um die Hälfte des Grundpreises. Eroberte Zellen
 übergeben ihr Gebäude dem Eroberer. Gold: Nationen 0,5/Tick + 0,0015 je Zelle (Tribes deutlich weniger).
 
 **KI-Verhalten (`src/core/ai.ts`):** Standard-Tribes bauen selten einen einzelnen Bunker, Elite-Tribes bis zu fünf
-Bunker/Städte, Nationen arbeiten die Wunschliste `NATION_WISHES` ab, stationieren Jäger, schicken Handels- und
+Bunker/Städte, Nationen arbeiten die Wunschliste `NATION_WISHES` ab, bauen danach aus, stationieren Jäger, schicken
 Kriegsschiffe, landen an feindlichen Küsten bzw. auf freien Inseln und setzen Bomber, Raketen und Nukes gegen
 ihren Kriegsgegner ein – höchstens ein Schlag je 10 s und ein Atomschlag je 60 s pro Nation, damit ein
 angespartes Vermögen nicht als eine Salve ankommt und SAM-Stellungen nachladen können.
@@ -219,7 +228,13 @@ angespartes Vermögen nicht als eine Salve ankommt und SAM-Stellungen nachladen 
 - **Rangliste:** oben rechts, einklappbar: Rang, Flagge, Name, Landanteil mit Balken (relativ zum Ersten), Truppen,
   Gold; die eigene Zeile hervorgehoben. Ein Klick fliegt zum Gebiet der Fraktion.
 - **Hotkeys:** `1`–`7` wählen ein Gebäude (Reihenfolge der `buildingRegistry`), `8`/`9` Bomber und Rakete;
-  `ESC` oder Rechtsklick verlässt den Modus.
+  `ESC` oder Rechtsklick verlässt den Modus. Im Baumodus baut ein Klick auf ein eigenes Gebäude derselben Art es aus;
+  der Ghost zeigt dann `⬆`, Preis und die Wirkung der nächsten Stufe. Rechtsklick auf ein Gebäude bietet `⬆ ausbauen`.
+- **☰-Menü** oben neben der Tempo-Leiste: Lautstärke, Hilfe, Karte exportieren, Startmenü. Die Zeile unter den
+  Reich-Werten nennt, was unter dem Mauszeiger liegt (mit Stufe, Anlaufzeit und Versorgung).
+- **Karte:** Stufen als Punkte unter dem Gebäude (gold auf Stufe 4), Anlaufzeit als blauer Bogen, Silo-Magazin
+  (`▮▮▯`) bzw. Nachladezeit, Fabrik-Reichweite und goldene Versorgungslinien; Kriegsschiffe werden je Stufe größer,
+  leuchten und tragen Winkel (`^`); Handelsschiffe sind klein und ohne Route.
 - **Bau-Ghost:** folgt dem Mauszeiger, zeigt Icon, Radien (Verteidigung, Abfangen, Reichweite der dort
   stationierten Einheiten, Wirkungsradius) und bei Fabriken die Linie zur angeschlossenen Stadt; grün, wenn
   `canBuild()` zustimmt, sonst rot mit Grund am Cursor. Bei der Stadt (`1`) pulsieren Marker an allen noch freien
@@ -304,7 +319,7 @@ Browser-Tests. `session()` liefert u. a. `game`, `proj`, `pack`, `lockstep` und 
 
 ## Vorgehensweise
 
-Iterativ in 7 Phasen – **nicht** alles auf einmal ohne Test bauen. Jede Phase wird mit `vitest` und per
+Iterativ in 8 Phasen – **nicht** alles auf einmal ohne Test bauen. Jede Phase wird mit `vitest` und per
 Playwright MCP im echten Browser geprüft, bevor die nächste beginnt.
 
 ### Phase 1 – Fundament (abgeschlossen)
@@ -471,3 +486,25 @@ Bekannte Grenzen nach Phase 7:
 - Historische Flaggen sind vereinfachte, eigene Zeichnungen; für Karthago ist keine Flagge überliefert, gezeigt
   wird das Tanit-Zeichen.
 - Eine Stadt erbt den Bonus nur beim Bau; wer eine bestehende Stadt erobert, übernimmt ihn mit dem Gebäude.
+
+### Phase 8 – Gebäude-Stufen, Versorgung, Seehandel & kompaktes Menü (abgeschlossen)
+
+- [x] **Gebäude-Stufen 1–4** (`upgrade`): mehr Wirkung und Reichweite; SAM-Stellungen brauchen 15 s Anlaufzeit und
+      reichen je Stufe weiter; Raketensilos schießen so oft wie ihre Stufe und laden dann die ganze Ladung nach.
+- [x] **Fabrik-Versorgung:** Gebäude im Umkreis arbeiten 25 % besser und laden schneller nach; goldene Linien auf der Karte.
+- [x] **Seehandel:** Häfen schicken Handelsschiffe von selbst (öfter und mehr je Stufe); Kriegsschiffe kapern feindliche
+      Handelsschiffe mit Ladung und ruhen danach 10 s; Kriegsschiffe steigen durch versenkte Kriegsschiffe auf.
+- [x] **☰-Menü** statt des großen Bedienfelds (Lautstärke, Hilfe, Export, Startmenü).
+- [x] Geprüft mit 124 Vitest-Tests (Ausbaukosten und -grenze, Wirkung je Stufe, Anlaufzeit, Abfangradius Stufe 1 vs. 4,
+      Silo-Magazin, Versorgung und kürzeres Nachladen, Handelsfahrten je Hafenstufe, Kapern mit Ruhezeit,
+      Kriegsschiff-Stufen; der Skript-Spieler auf „Unmöglich“ gewinnt weiter, nun mit Ausbau) und im Browser:
+      ☰-Menü öffnet und schließt, Stadt per `1` + Klick und SAM per Rechtsklick ausgebaut, Ausbau-Vorschau,
+      Anlaufzeit-Bogen, zweiter Raketenstart abgelehnt („lädt nach“), Versorgungslinien, Handelsschiff Türkei → Ungarn,
+      KI-Kriegsschiffe der Stufe 2 im laufenden Spiel.
+
+Bekannte Grenzen nach Phase 8:
+
+- Handel braucht einen Seeweg; Meerengen, über die eine Straße führt (Bosporus), sind im Gitter Land.
+- Ein erobertes Gebäude behält seine Stufe; ein erobertes Silo bringt seine volle Ladung mit.
+- Das Balancing der Stufen ist nicht durch Spieltests abgestimmt: KI-Nationen bauen ihre Gebäude ausdauernd aus,
+  ein Gewinner kann so schneller davonziehen.
