@@ -301,6 +301,9 @@ function dispatch(g: Game): void {
   }
 }
 
+/** Ticks until a unit reaches its target: along its sea route, or the rest of its flight. */
+export const etaTicks = (u: Unit) => (u.path ? Math.ceil((u.path.length - 1 - u.progress) / u.def.speed) : u.steps - u.progress);
+
 /** What a trade run along `path` is worth. */
 const cargo = (u: Unit) => u.def.trade!.gold + u.def.trade!.perCell * (u.path!.length - 1);
 

@@ -22,7 +22,8 @@ direkt von Browser zu Browser, ohne Server.
   Metropole übernimmt deren Namen und Bonus.
 - **Flaggen-Bibliothek:** über hundert heutige Staaten und historische Reiche als Vorlage für die eigene Nation.
 - **Tutorial:** ein geführtes erstes Spiel in sechs Schritten, direkt vom Startbildschirm.
-- **Mehrspieler:** „Raum erstellen“, Link verschicken, losspielen. Peer-to-Peer über WebRTC.
+- **Mehrspieler:** „Raum erstellen“, Link verschicken, losspielen – über einen kleinen Relay-Server (Cloudflare
+  Worker), wenn einer eingerichtet ist, sonst Peer-to-Peer über WebRTC.
 
 ## Steuerung
 
@@ -40,6 +41,23 @@ direkt von Browser zu Browser, ohne Server.
 | `M`, `H` | Ton aus/an, Hilfe |
 
 Gewonnen hat, wer 80 % der Landfläche hält oder als Letzter übrig ist.
+
+## Mehrspieler-Server einrichten (einmalig)
+
+Ohne Server finden sich Spieler über öffentliche Nostr-Relays und verbinden sich direkt per WebRTC. Das scheitert
+manchmal an Routern oder an Relays, die gerade ausfallen. Zuverlässiger ist der Relay-Server in `relay/`, ein
+Cloudflare Worker, der im Gratis-Tarif läuft und nur Nachrichten weiterreicht:
+
+1. Im Cloudflare-Dashboard unter *My Profile → API Tokens* ein Token mit der Vorlage **„Edit Cloudflare Workers“**
+   erstellen.
+2. Im GitHub-Repository unter *Settings → Secrets and variables → Actions* das Secret `CLOUDFLARE_API_TOKEN`
+   anlegen (bei mehreren Cloudflare-Konten zusätzlich `CLOUDFLARE_ACCOUNT_ID`).
+3. Den Workflow **„Deploy relay to Cloudflare“** unter *Actions* starten. Er nennt am Ende die Adresse,
+   `https://osm-front-relay.<dein-subdomain>.workers.dev`.
+4. Diese Adresse als Repository-Variable `RELAY_URL` (Tab *Variables*) eintragen und **„Deploy to GitHub Pages“**
+   neu starten. Ab dann verbinden sich alle über den Server; ist er nicht erreichbar, fällt das Spiel auf
+   Peer-to-Peer zurück. Mit `?net=p2p` in der Adresse lässt sich P2P erzwingen, mit `?relay=<adresse>` ein anderer
+   Server testen.
 
 ## Entwickeln
 
@@ -59,6 +77,12 @@ npm test
 npm run build
 ```
 
+Den Relay-Server lokal starten (für `?relay=http://localhost:8787`):
+
+```bash
+cd relay && npx wrangler dev --port 8787
+```
+
 Vite, TypeScript (strict), MapLibre GL JS, `trystero` für WebRTC, `vitest` für die Simulation. Die Spiellogik
 in `src/core/` ist deterministisch und frei von DOM und Netzwerk; Architektur, Regeln und der Stand jeder
 Phase stehen in [`CLAUDE.md`](CLAUDE.md). Jeder Push auf `main` wird getestet, gebaut und auf GitHub Pages
@@ -69,6 +93,8 @@ veröffentlicht.
 - Kartendaten © [OpenStreetMap](https://www.openstreetmap.org/copyright)-Mitwirkende (ODbL),
   Kacheln und Basiskarte von [OpenFreeMap](https://openfreemap.org/) im OpenMapTiles-Schema.
 - Höhendaten: Terrarium-Kacheln (Mapzen / AWS Open Data).
+- Historische Flaggen: [Wikimedia Commons](https://commons.wikimedia.org/wiki/Historical_flags) (gemeinfrei bzw. CC BY-SA,
+  siehe die jeweilige Dateiseite); heutige Flaggen: flag-icons.
 - Ländergrenzen: [Natural Earth](https://www.naturalearthdata.com/) über `world-atlas`; Städte: [GeoNames](https://www.geonames.org/) (CC BY 4.0);
   Flaggen: [flag-icons](https://github.com/lipis/flag-icons) (MIT).
 - [MapLibre GL JS](https://maplibre.org/), [Trystero](https://github.com/dmotz/trystero).

@@ -13,7 +13,7 @@ Diese Datei enthält die Architektur-Regeln, die im gesamten Projektverlauf gelt
 | Build & Sprache | Vite + TypeScript (Strict Mode). `base: './'` in `vite.config.ts`, damit GitHub Pages sofort läuft. |
 | Karte | MapLibre GL JS als echter OSM-Kartenhintergrund. |
 | Rendering | Darüberliegendes Canvas-/PixiJS-/WebGL-Overlay, das das Grid mit 60 FPS rendert und synchron mit der MapLibre-Kamera zoomt/verschiebt. Umgesetzt als Canvas mit einem Pixel pro Zelle, das MapLibre als `canvas`-Quelle über die Bounding-Box spannt; Namen und Truppenzahlen liegen auf einem zweiten 2D-Canvas darüber. |
-| Netzwerk | `trystero` über Nostr-/Torrent-Relays, kein eigener Backend-Server. Raum-Beitritt über URL-Hash (`#room=xyz`). |
+| Netzwerk | Relay-Server als Cloudflare Worker (`relay/`, nur Weiterleitung, keine Spiellogik), sonst `trystero` (WebRTC, Vermittlung über Nostr-Relays). Raum-Beitritt über URL-Hash (`#room=xyz`). |
 | Tests | `vitest` für die deterministische Simulations-Engine. |
 
 ## 2. Engine strikt getrennt vom Rendering
@@ -97,7 +97,8 @@ Doktrin. Es liegt im `localStorage`, geht per `hello` an die Lobby und mit dem `
 liest nur ihre Zahlen. Die Vorlagen-Bibliothek (`src/core/nation-presets.ts`) bietet 101 heutige Staaten und
 14 historische Reiche (u. a. Österreich-Ungarn, Römisches Reich, Byzanz, Preußen, Osmanisches Reich, UdSSR,
 HRR); eine Wahl setzt Name, Farben, Flagge (`flag.preset`) und Doktrin, alles bleibt danach änderbar. Die Bilder
-liegen in `src/render/flag-library.ts`: heutige Flaggen aus `flag-icons`, historische als eigene SVGs. KI-Nationen,
+liegen in `src/render/flag-library.ts`: heutige Flaggen aus `flag-icons`, historische als Wikimedia-Commons-SVGs in `src/assets/flags/` (Karthago hat dort keine und bleibt
+eine eigene Zeichnung; fehlt eine Datei, springt die Zeichnung ein; ein Test prüft, dass dort nur echte SVGs liegen). KI-Nationen,
 die nach einem echten Staat heißen, tragen dessen Flagge (`Faction.flag`).
 
 
@@ -194,6 +195,11 @@ angespartes Vermögen nicht als eine Salve ankommt und SAM-Stellungen nachladen 
 
 ## 6. Angriffs-Mechaniken
 
+- **Freies Land kostet:** je Zelle `SETTLE_COST` = 10 Truppen zusätzlich zum Terrain und die volle
+  Eroberungszeit. Ausdehnung ist damit eine Entscheidung, nicht nebenbei erledigt.
+- **Brückenköpfe:** Eine Landung von See oder aus der Luft gräbt sich ein. 30 s lang (`BEACHHEAD_TICKS`) kostet eigenes
+  Land im Umkreis von 6 Zellen den Gegner +200 % und fällt 4 Ticks später. Trifft eine Landung auf Land eines
+  Vertragspartners (Pakt, Bündnis), wird sie abgebrochen und die Truppen kehren heim – kein ungewollter Vertragsbruch.
 - **Frontlinien-Fluten (Core OpenFront):** Der Spieler wählt per Slider 5–100 % seiner verfügbaren Truppen und
   ein angrenzendes Zielgebiet. Ein Tick-System (10 Ticks/Sek.) berechnet anhand von Truppendichte, Terrain und
   Bunkern die Eroberung der Grenzzellen (Flood-Fill/BFS-Queue entlang der Grenze).
@@ -232,7 +238,7 @@ angespartes Vermögen nicht als eine Salve ankommt und SAM-Stellungen nachladen 
   der Ghost zeigt dann `⬆`, Preis und die Wirkung der nächsten Stufe. Rechtsklick auf ein Gebäude bietet `⬆ ausbauen`.
 - **☰-Menü** oben neben der Tempo-Leiste: Lautstärke, Hilfe, Karte exportieren, Startmenü. Die Zeile unter den
   Reich-Werten nennt, was unter dem Mauszeiger liegt (mit Stufe, Anlaufzeit und Versorgung).
-- **Karte:** Stufen als Punkte unter dem Gebäude (gold auf Stufe 4), Anlaufzeit als blauer Bogen, Silo-Magazin
+- **Karte:** Stufen als Ring und Schild (siehe Grafik), Anlaufzeit als blauer Bogen, Silo-Magazin
   (`▮▮▯`) bzw. Nachladezeit, Fabrik-Reichweite und goldene Versorgungslinien; Kriegsschiffe werden je Stufe größer,
   leuchten und tragen Winkel (`^`); Handelsschiffe sind klein und ohne Route.
 - **Bau-Ghost:** folgt dem Mauszeiger, zeigt Icon, Radien (Verteidigung, Abfangen, Reichweite der dort
@@ -247,8 +253,15 @@ angespartes Vermögen nicht als eine Salve ankommt und SAM-Stellungen nachladen 
   Diplomatie, Verteidigung, Abschluss). Er sieht das Ergebnis jedes eigenen Kommandos und schaltet nur weiter,
   wenn die verlangte Aktion wirklich ausgeführt wurde. Läuft auf dem Balkan auf „Leicht“, nur im Einzelspiel;
   dort darf `main.ts` die Bühne direkt bereiten (Startgold, ein „Übungsstamm“ als Nachbar).
-- **Alarme:** oben mittig je Bedrohung ein Knopf (Bodenoffensive, Landung, Luftangriff, Rakete) mit Richtungspfeil;
-  ein Klick zentriert die Karte auf die Front bzw. das Ziel.
+- **Alarme:** oben mittig je Bedrohung ein Knopf mit Einheiten-Grafik, Countdown („30 s“, `etaTicks()`), Angreifer und
+  Mannstärke („LANDUNG von SCHWEDEN · 5.000 Mann“) und Richtungspfeil, das dringendste zuerst; unter 10 s kehrt sich
+  der Countdown um. Auf der Karte pulsiert ein roter Ring um alles, was auf den Spieler zuhält, mit Mann und Restzeit.
+  Ein Klick zentriert die Karte auf die Front bzw. das Ziel.
+- **Angebote:** große Karten oben mittig mit Flagge, Klartext, Restzeit, „Annehmen“ und „Ablehnen“ (Ablehnen blendet
+  nur aus; das Angebot läuft beim Absender ab).
+- **Grafik (`src/render/icons.ts`):** Gebäude und Einheiten als Vektorgrafiken in der Farbe des Besitzers – auf der
+  Karte, in der Hotkey-Leiste, im Radialmenü und in den Alarmen. Stufen: Ring in Besitzerfarbe, Bronze, Silber, Gold
+  (Stufe 4 doppelt und leuchtend) und ein Schild mit römischer Zahl.
 - **Cursor (`cursors.ts`):** `default`, `attack` (angrenzender Gegner), `landing` (fremde Küste bei eigenem Hafen),
   `build`, `target`. Der aktuelle Zustand steht auch in `canvas.dataset.cursor`.
 
@@ -277,8 +290,16 @@ angespartes Vermögen nicht als eine Salve ankommt und SAM-Stellungen nachladen 
   Turn, hält er an und meldet den Synchronisationsverlust.
 - Die Welt steht, bis alle im Raum ihr Startgebiet gewählt haben (höchstens 30 s).
 - Die Spieluhr läuft in einem Worker, damit ein Host im Hintergrund-Tab das Spiel nicht einfriert.
-- `Transport` ist eine Schnittstelle: `trystero` (WebRTC, Vermittlung über öffentliche Nostr-Relays) oder mit
-  `?net=local` ein `BroadcastChannel` zwischen Tabs desselben Browsers – für Entwicklung und Browser-Tests.
+- `Transport` ist eine Schnittstelle mit drei Umsetzungen (`src/net/transport.ts`):
+  - `relayTransport` – WebSocket zum Relay-Server `relay/worker.js` (Cloudflare Worker, ein Durable Object je Raum,
+    leitet JSON weiter, Binärdaten in Base64-Stücken von 600 kB). Funktioniert hinter jedem Router. Aktiv, wenn der
+    Build `VITE_RELAY_URL` kennt (Repository-Variable `RELAY_URL`) oder die Adresse `?relay=` nennt; ist der Server
+    nicht erreichbar, fällt das Spiel auf P2P zurück. Deploy über den Workflow „Deploy relay to Cloudflare“
+    (Secret `CLOUDFLARE_API_TOKEN`), Anleitung im README.
+  - `trysteroTransport` – WebRTC, Vermittlung über öffentliche Nostr-Relays (10 gleichzeitig, weil einzelne oft
+    ausfallen oder Trystero-Nachrichten ablehnen). Kein TURN: hinter strengen NATs kann es scheitern.
+  - `localTransport` – mit `?net=local` ein `BroadcastChannel` zwischen Tabs – für Entwicklung und Browser-Tests.
+- Die Lobby zeigt, wie verbunden wird („über den OSM-Front-Server“ bzw. „Peer-to-Peer, x von y Relays“).
 
 **Lobby:** „Raum erstellen“ setzt `#room=<id>`; wer den Link öffnet, tritt bei. Host ist, wer den Raum eröffnet
 hat (in `sessionStorage` gemerkt, überlebt einen Reload); nur er wählt die Karte. Verträge zwischen Spielern
@@ -319,7 +340,7 @@ Browser-Tests. `session()` liefert u. a. `game`, `proj`, `pack`, `lockstep` und 
 
 ## Vorgehensweise
 
-Iterativ in 8 Phasen – **nicht** alles auf einmal ohne Test bauen. Jede Phase wird mit `vitest` und per
+Iterativ in 9 Phasen – **nicht** alles auf einmal ohne Test bauen. Jede Phase wird mit `vitest` und per
 Playwright MCP im echten Browser geprüft, bevor die nächste beginnt.
 
 ### Phase 1 – Fundament (abgeschlossen)
@@ -418,7 +439,8 @@ Bekannte Grenzen nach Phase 4:
       Schwierigkeitsgrade, Ladebalken, Spielzeit im HUD, ruhige Warnungen bei `prefers-reduced-motion`,
       schmaleres HUD auf kleinen Bildschirmen.
 - [x] **Schwierigkeit** (`DIFFICULTY` in `src/core/game.ts`, Teil der Simulation, der Host gibt sie vor):
-      Leicht – KI wächst mit 70 %, 120 s Schonfrist; Normal – 100 %, 45 s; Schwer – 125 %, keine Schonfrist.
+      Leicht – KI wächst mit 70 %, 120 s Schonfrist; Normal – 100 %, 45 s; Schwer – 125 %, keine Schonfrist
+      (seit Phase 9: 60 / 85 / 110 %).
       In der Schonfrist wählt die KI keinen Spieler als Beute, wehrt sich aber, wenn sie angegriffen wird.
 - [x] **Finales GitHub-Pages-Deployment** mit `README.md`, Seitenbeschreibung und Theme-Farbe.
 - [x] Geprüft mit 76 Vitest-Tests und im Browser: Effekte werden bei Bau, Befehl, Explosion und Niederlage
@@ -508,3 +530,31 @@ Bekannte Grenzen nach Phase 8:
 - Ein erobertes Gebäude behält seine Stufe; ein erobertes Silo bringt seine volle Ladung mit.
 - Das Balancing der Stufen ist nicht durch Spieltests abgestimmt: KI-Nationen bauen ihre Gebäude ausdauernd aus,
   ein Gewinner kann so schneller davonziehen.
+
+### Phase 9 – Balance, Brückenköpfe, Grafik, Alarme, Angebote, Flaggen & verlässlicher Mehrspieler (abgeschlossen)
+
+- [x] **Langsamere Ausdehnung:** freies Land kostet 10 Truppen je Zelle mehr und die volle Eroberungszeit – nach zwei
+      Minuten hält man rund ein Sechstel der früheren Fläche.
+- [x] **Fairere KI:** Gebäude-Wachstumsbonus gedeckelt bei +75 % (vorher +150 %; Ungarn stand bei +117 %),
+      KI baut erst mit dem dreifachen Preis aus, KI-Wachstum Leicht/Normal/Schwer 60/85/110 % (Unmöglich 135 %).
+      Auf „Normal“ liegen Spieler und KI bei gleicher Spielweise jetzt gleichauf statt 1:1,6.
+- [x] **Brückenköpfe** halten 30 s (+200 % Verteidigung im Umkreis 6); Landungen auf Vertragspartner werden abgebrochen.
+- [x] **Grafik:** Vektor-Icons für alle Gebäude und Einheiten, Stufen-Ring und -Schild, größere Einheiten.
+- [x] **Alarme** mit Countdown, Grafik und Mannstärke; roter Ring und „Mann · s“ am anfliegenden Gegner.
+- [x] **Angebote** als große Karten mit Annehmen/Ablehnen und Restzeit.
+- [x] **Historische Flaggen** von Wikimedia Commons.
+- [x] **Mehrspieler:** Relay-Server (Cloudflare Worker) mit P2P-Rückfall, Trystero mit 10 statt 5 Relays.
+- [x] Geprüft mit 130 Vitest-Tests (u. a. Brückenkopf, abgebrochene Landung, Schwierigkeit gegen den Spieler gemessen,
+      Skript-Spieler gewinnt auf Normal und Schwer, hält auf Unmöglich durch, Flaggendateien) und im Browser: Relay
+      lokal (`wrangler dev`) mit zwei getrennten Browser-Kontexten – Lobby, 2-MB-Nachricht in Stücken, Spielstart,
+      gleicher Zustands-Hash; dasselbe über echtes P2P (Beitritt in 1,2 s); Icons, Stufen-Schilde,
+      Landungs-Alarm „35 s · LANDUNG von ALBANIEN · 8.000 Mann“, Angebots-Karten, Ablehnen.
+
+Bekannte Grenzen nach Phase 9:
+
+- Der Relay-Server ist gebaut und lokal geprüft, aber noch nicht veröffentlicht: dafür braucht es ein Cloudflare-Token
+  im Repository (README). Bis dahin läuft der Mehrspieler über P2P.
+- „Unmöglich“ ist im Duell-Test nur noch durchzuhalten, nicht mehr zu gewinnen: Seit freies Land teurer ist, zahlt
+  sich der Wachstumsvorsprung der KI über die längere Ausbreitungsphase stärker aus.
+- Österreich-Ungarn und Makedonien kamen wegen Wikimedia-Drosselung (HTTP 429) noch nicht herunter und nutzen die
+  eigenen Zeichnungen, bis die Dateien in `src/assets/flags/` liegen.
