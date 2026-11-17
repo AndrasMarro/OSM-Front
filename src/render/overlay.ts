@@ -1,4 +1,5 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
+import { CITY_TIERS } from '../core/buildings';
 import { NEUTRAL, RALLY_RADIUS, type Attack, type Game, type GameEvent } from '../core/game';
 import type { GridProjection } from '../core/maps/projection';
 import type { Unit } from '../core/units';
@@ -44,6 +45,8 @@ export interface View {
   /** Cell the context menu is open for, or -1. */
   selected: number;
   ghost: Ghost | null;
+  /** Real cities to mark while a city is being placed: where building one pays off. */
+  cities?: { cell: number; label: string }[];
   /** A place the tutorial points at: a pulsing circle of this many cells. */
   hint?: { cell: number; radius: number } | null;
 }
@@ -223,7 +226,22 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, gam
       if (!visible(p)) continue;
       const sprite = badge(b.def.icon, rgb(b.owner), size);
       ctx.drawImage(sprite, p.x - sprite.width / (2 * SPRITE_SCALE), p.y - sprite.height / (2 * SPRITE_SCALE), sprite.width / SPRITE_SCALE, sprite.height / SPRITE_SCALE);
+      // A city that has merged with a real one carries its name.
+      if (b.city && cellPx >= 3) caption(`🏙️ ${b.city.name} (${CITY_TIERS[b.city.tier].label})`, p.x, p.y + size + 4, '#fff', 11);
     }
+  }
+
+  // Real cities still free, while the player is placing a city.
+  for (const c of view.cities ?? []) {
+    const p = ofCell(c.cell);
+    if (!visible(p)) continue;
+    ring(p, 5 + 3 * pulse);
+    ctx.fillStyle = `rgb(255 212 94 / ${30 + 30 * pulse}%)`;
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#ffd45e';
+    ctx.stroke();
+    if (cellPx >= 2) caption(c.label, p.x, p.y - 13, '#ffd45e', 10);
   }
 
   // Units: the route ahead as marching dashes, then the marker turned into its heading.

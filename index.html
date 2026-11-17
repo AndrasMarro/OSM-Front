@@ -15,7 +15,6 @@
     <div id="hud" hidden>
       <section id="stats" class="panel" aria-label="Dein Reich"></section>
       <section id="offers" class="panel" aria-label="Diplomatische Angebote" hidden></section>
-      <section class="panel" aria-label="Rangliste nach Gebiet (Zellen)"><ol id="leaderboard"></ol></section>
       <section id="controls" class="panel">
         <p id="hover">&nbsp;</p>
         <label for="volume">Lautstärke <output id="volume-value" for="volume"></output></label>
@@ -25,7 +24,12 @@
         <button id="to-menu" type="button">Karte wechseln</button>
       </section>
     </div>
+    <details id="ranking" class="panel" open hidden>
+      <summary>Rangliste <small>Land · Truppen · Gold</small></summary>
+      <div id="leaderboard" aria-label="Rangliste nach Landanteil"></div>
+    </details>
     <div id="top">
+      <nav id="speed" class="panel" aria-label="Spieltempo" hidden></nav>
       <section id="guide" class="panel" aria-label="Tutorial" aria-live="polite" hidden>
         <small id="guide-progress"></small>
         <strong id="guide-title"></strong>
@@ -126,6 +130,7 @@
       <form id="nation-form">
         <canvas width="150" height="100" aria-label="Vorschau deiner Flagge"></canvas>
         <div class="fields">
+          <label class="wide">Vorlage: Staat oder historisches Reich <select name="preset"></select></label>
           <label>Nation <input name="name" maxlength="20" required /></label>
           <label>Herrscher <input name="ruler" maxlength="20" required /></label>
           <label>Gebietsfarbe <input name="primary" type="color" list="palette" /></label>
@@ -179,8 +184,16 @@
         <dd>Greift sofort an: freies Nachbarland oder eine angrenzende Fraktion, mit dem unten eingestellten Truppenanteil. Ziehen verschiebt die Karte.</dd>
         <dt>Rechtsklick</dt>
         <dd>Öffnet das Radialmenü: Bauen auf eigenem Gebiet; Schiffe, Luftwaffe, Raketen und Diplomatie auf fremdem; Marine auf Wasser.</dd>
-        <dt><kbd>Q</kbd> <kbd>E</kbd> · <kbd>A</kbd> <kbd>D</kbd></dt>
+        <dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / Pfeile</dt>
+        <dd>Kamera verschieben.</dd>
+        <dt><kbd>Q</kbd> <kbd>E</kbd></dt>
         <dd>Truppenanteil senken / erhöhen – auch mit dem Mausrad über dem Regler oder mit Umschalt + Mausrad.</dd>
+        <dt><kbd>Leertaste</kbd> · <kbd>+</kbd> <kbd>−</kbd></dt>
+        <dd>Pause · Spieltempo schneller / langsamer (0.5x bis 4x; im Mehrspieler nur der Host).</dd>
+        <dt>Rangliste</dt>
+        <dd>Oben rechts; ein Klick auf einen Eintrag fliegt zu dessen Gebiet.</dd>
+        <dt>Echte Städte</dt>
+        <dd>Mit <kbd>1</kbd> zeigen pulsierende Marker echte Städte: eine Stadt dort übernimmt Namen und Bonus.</dd>
         <dt><kbd>1</kbd>–<kbd>7</kbd></dt>
         <dd>Gebäude wählen; die Vorschau unter der Maus zeigt Reichweite und ob der Platz taugt. Linksklick baut.</dd>
         <dt><kbd>8</kbd> <kbd>9</kbd></dt>

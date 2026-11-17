@@ -5,6 +5,7 @@ import { drawLine, fillPolygon } from '../core/maps/rasterize';
 import { synthForest, synthRail } from '../core/maps/synth';
 import type { MapPackDefinition } from '../core/maps/types';
 import { Terrain } from '../core/terrain';
+import { countryMask } from './countries';
 
 /** OpenFreeMap: OSM data in the OpenMapTiles schema, free and without an API key. */
 const TILEJSON_URL = 'https://tiles.openfreemap.org/planet';
@@ -76,7 +77,7 @@ async function maskTerrain(url: string, w: number, h: number): Promise<Uint8Arra
   ctx.drawImage(bitmap, 0, 0, w, h);
   const pixels = ctx.getImageData(0, 0, w, h).data;
   const terrain = new Uint8Array(w * h);
-  for (let i = 0; i < terrain.length; i++) terrain[i] = Math.min(Terrain.ICE, pixels[i * 4]);
+  for (let i = 0; i < terrain.length; i++) terrain[i] = Math.min(Terrain.OUT_OF_BOUNDS, pixels[i * 4]);
   return terrain;
 }
 
@@ -210,5 +211,15 @@ export async function loadTerrain(
   paint('transportation', LINE, (c) => c === 'motorway', Terrain.HIGHWAY);
   if (vectorZoom >= RAIL_ZOOM) paint('transportation', LINE, (c) => c === 'rail', Terrain.RAIL);
   else synthRail(terrain, w, h, railHubs(pack, proj, vector, terrain));
+  // Last of all, the borders: land of countries the map is not about is out of bounds.
+  if (pack.countries?.length) {
+    try {
+      const mask = await countryMask(pack, proj);
+      for (let i = 0; i < terrain.length; i++) if (mask[i] === 2 && terrain[i] !== Terrain.WATER) terrain[i] = Terrain.OUT_OF_BOUNDS;
+    } catch (err) {
+      // Without the border data the map is still playable, box to box.
+      console.warn('country borders unavailable', err);
+    }
+  }
   return terrain;
 }

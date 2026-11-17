@@ -305,35 +305,107 @@ dialog #nation-form fieldset {
   gap: 8px;
   align-items: center;
 }
-#leaderboard .flag {
-  margin-top: 0.2em;
+#ranking {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 300px;
+  padding: 6px 8px;
+  font-size: 0.9em;
+}
+#ranking[hidden],
+#speed[hidden] {
+  display: none;
+}
+#ranking summary {
+  padding: 2px 4px;
+  cursor: pointer;
+  font-weight: 700;
+}
+#ranking summary small {
+  float: right;
+  color: #8f9bab;
+  font-weight: 400;
 }
 #leaderboard {
-  margin: 0;
-  padding-left: 1.6em;
+  display: grid;
+  gap: 1px;
+  margin-top: 4px;
   font-variant-numeric: tabular-nums;
 }
-#leaderboard li {
-  display: flex;
+#leaderboard button {
+  display: grid;
+  grid-template-columns: 1.3em 1.6em minmax(0, 1fr) 4.6em 3.2em 3.2em;
   gap: 6px;
-  justify-content: space-between;
+  align-items: center;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
 }
-#leaderboard li.me {
+#leaderboard button:hover,
+#leaderboard button:focus-visible {
+  background: #263447;
+}
+#leaderboard button.me {
+  background: rgb(36 120 255 / 28%);
+  box-shadow: inset 3px 0 #7db4ff;
   font-weight: 700;
-  color: #7db4ff;
 }
-#leaderboard i {
-  flex: none;
-  width: 0.8em;
-  height: 0.8em;
-  margin-top: 0.3em;
-  border-radius: 2px;
+#leaderboard .rank {
+  color: #8f9bab;
+  text-align: right;
 }
-#leaderboard span {
-  flex: 1;
+#leaderboard .flag.icon {
+  text-align: center;
+  line-height: 1;
+}
+#leaderboard .name {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+#leaderboard .land {
+  position: relative;
+  text-align: right;
+  padding-bottom: 4px;
+}
+#leaderboard .bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  border-radius: 2px;
+}
+#leaderboard .troops,
+#leaderboard .gold {
+  text-align: right;
+}
+#leaderboard .gold {
+  color: #ffd45e;
+}
+#speed {
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+}
+#speed button {
+  min-width: 42px;
+  padding: 4px 8px;
+  font-variant-numeric: tabular-nums;
+}
+#speed button[aria-pressed='true'] {
+  border-color: #7db4ff;
+  background: #23406b;
+  font-weight: 700;
+}
+#speed button:disabled {
+  cursor: default;
+}
+#nation-form .wide {
+  grid-column: 1 / -1;
 }
 #controls {
   display: grid;
@@ -699,7 +771,15 @@ kbd {
     width: 190px;
     font-size: 12px;
   }
-  #leaderboard li:nth-child(n + 4):not(.me) {
+  #ranking {
+    width: 230px;
+  }
+  #leaderboard button {
+    grid-template-columns: 1.3em 1.6em minmax(0, 1fr) 4.2em;
+  }
+  #leaderboard .troops,
+  #leaderboard .gold,
+  #leaderboard button:nth-child(n + 5):not(.me) {
     display: none;
   }
   #hotbar {

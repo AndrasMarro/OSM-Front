@@ -1,5 +1,6 @@
 import { DEFAULT_NATION, doctrineRegistry, EMBLEMS, FLAG_LAYOUTS, sanitizeNation, type NationProfile } from '../core/nation';
-import { drawFlag } from '../render/flag';
+import { applyPreset, NATION_PRESETS } from '../core/nation-presets';
+import { flagImage } from '../render/flag';
 
 const STORAGE_KEY = 'osm-front:nation';
 const LAYOUT_LABEL: Record<(typeof FLAG_LAYOUTS)[number], string> = { triH: 'Trikolore waagrecht', triV: 'Trikolore senkrecht', cross: 'Kreuz', diagonal: 'Diagonal', circle: 'Kreis' };
@@ -31,38 +32,60 @@ export function setupNationEditor(form: HTMLFormElement, onChange: (nation: Nati
   field<HTMLSelectElement>('emblem').replaceChildren(...EMBLEMS.map((e) => option(e, EMBLEM_LABEL[e])));
   field<HTMLSelectElement>('doctrine').replaceChildren(...doctrineRegistry.list().map((d) => option(d.id, `${d.name} – ${d.text}`)));
 
-  const values: Record<string, string> = {
-    name: nation.name,
-    ruler: nation.ruler,
-    primary: nation.primary,
-    secondary: nation.secondary,
-    layout: nation.flag.layout,
-    color1: nation.flag.colors[0],
-    color2: nation.flag.colors[1],
-    color3: nation.flag.colors[2],
-    emblem: nation.flag.emblem,
-    emblemColor: nation.flag.emblemColor,
-    doctrine: nation.doctrine,
+  // The library: today's states and historic empires, each a complete nation to start from.
+  const group = (label: string, category: string) => {
+    const g = Object.assign(document.createElement('optgroup'), { label });
+    g.append(...NATION_PRESETS.filter((p) => p.category === category).map((p) => option(p.id, p.name)));
+    return g;
   };
-  for (const [name, value] of Object.entries(values)) field(name).value = value;
+  field<HTMLSelectElement>('preset').replaceChildren(option('', 'Eigene Gestaltung'), group('Historische Reiche & alte Nationen', 'historic'), group('Heutige Staaten', 'modern'));
+
+  const fill = (n: NationProfile) => {
+    const values: Record<string, string> = {
+      preset: n.flag.preset ?? '',
+      name: n.name,
+      ruler: n.ruler,
+      primary: n.primary,
+      secondary: n.secondary,
+      layout: n.flag.layout,
+      color1: n.flag.colors[0],
+      color2: n.flag.colors[1],
+      color3: n.flag.colors[2],
+      emblem: n.flag.emblem,
+      emblemColor: n.flag.emblemColor,
+      doctrine: n.doctrine,
+    };
+    for (const [name, value] of Object.entries(values)) field(name).value = value;
+  };
+  fill(nation);
 
   const preview = form.querySelector('canvas')!;
   const paint = () => {
     const ctx = preview.getContext('2d')!;
     ctx.clearRect(0, 0, preview.width, preview.height);
-    drawFlag(ctx, nation.flag, 1, 1, preview.width - 2, preview.height - 2);
+    ctx.drawImage(flagImage(nation.flag).canvas, 1, 1, preview.width - 2, preview.height - 2);
   };
   paint();
+  // A library flag is a picture that may arrive a moment after it was chosen.
+  const repaintSoon = () => [150, 600, 1500].forEach((ms) => setTimeout(paint, ms));
+  repaintSoon();
 
   form.addEventListener('submit', (e) => e.preventDefault());
-  form.addEventListener('input', () => {
+  const FLAG_FIELDS = ['layout', 'color1', 'color2', 'color3', 'emblem', 'emblemColor'];
+  form.addEventListener('input', (e) => {
     const v = (name: string) => field(name).value;
+    const changed = (e.target as HTMLInputElement).name;
+    // Picking a preset fills in the whole nation; it stays editable afterwards.
+    const picked = changed === 'preset' ? NATION_PRESETS.find((p) => p.id === v('preset')) : undefined;
+    if (picked) fill(applyPreset(picked, nation));
+    // Whoever redesigns the flag by hand leaves the library flag behind.
+    if (FLAG_FIELDS.includes(changed)) field('preset').value = '';
     nation = sanitizeNation({
       name: v('name'),
       ruler: v('ruler'),
       primary: v('primary'),
       secondary: v('secondary'),
-      flag: { layout: v('layout'), colors: [v('color1'), v('color2'), v('color3')], emblem: v('emblem'), emblemColor: v('emblemColor') },
+      flag: { layout: v('layout'), colors: [v('color1'), v('color2'), v('color3')], emblem: v('emblem'), emblemColor: v('emblemColor'), preset: v('preset') || undefined },
       doctrine: v('doctrine'),
     });
     try {
@@ -71,6 +94,7 @@ export function setupNationEditor(form: HTMLFormElement, onChange: (nation: Nati
       // Storage full or disabled: the nation still holds for this visit.
     }
     paint();
+    repaintSoon();
     onChange(nation);
   });
   return nation;

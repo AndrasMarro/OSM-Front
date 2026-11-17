@@ -1,23 +1,24 @@
-import { Map as MapLibreMap, setWorkerUrl, type CanvasSource } from 'maplibre-gl';
+import { Map as MapLibreMap, setWorkerUrl, type CanvasSource, type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
-import { buildingRegistry, canBuild, linkedCity, price, type BuildingDefinition, type OrderResult } from './core/buildings';
+import { buildingRegistry, canBuild, CITY_TIERS, linkedCity, price, type BuildingDefinition, type OrderResult } from './core/buildings';
 import type { CommandResult } from './core/commands';
 import type { DiplomaticStatus, Treaty } from './core/diplomacy';
 import type { Faction } from './core/faction';
 import { doctrineRegistry, type NationProfile } from './core/nation';
-import { DIFFICULTY, NEUTRAL, TICKS_PER_SECOND, type Difficulty, type Game, type GameEvent } from './core/game';
+import { DIFFICULTY, NEUTRAL, TICKS_PER_SECOND, type Difficulty, type Game, type GameEvent, type RealCity } from './core/game';
 import { GridProjection } from './core/maps/projection';
 import { mapRegistry, validateMapPack } from './core/maps/registry';
 import type { MapPackDefinition } from './core/maps/types';
 import { createGame } from './core/setup';
-import { Terrain } from './core/terrain';
+import { isLand, Terrain } from './core/terrain';
 import { unitCost, unitRegistry, type UnitDefinition } from './core/units';
 import { Lobby } from './net/lobby';
-import { Lockstep, type PlayerCommand } from './net/lockstep';
+import { Lockstep, SPEEDS, type PlayerCommand } from './net/lockstep';
 import { localTransport, trysteroTransport, type Transport } from './net/transport';
+import { borderLines } from './osm/countries';
 import { loadTerrain } from './osm/terrain';
-import { flagElement, flagImage } from './render/flag';
+import { factionFlag, flagElement, flagImage } from './render/flag';
 import { drawLabels, factionIcon, formatTroops } from './render/labels';
 import { drawOverlay, frontOf, type Ghost } from './render/overlay';
 import { factionColor, TerritoryPainter } from './render/territory';
@@ -35,7 +36,7 @@ const LAYER = 'territory';
 const VICTORY_SHARE = 0.8;
 /** In multiplayer the world starts moving once everybody has picked a start, or after this long. */
 const SPAWN_WAIT_MS = 30_000;
-const TERRAIN_LABEL = ['Wasser', 'Ebene', 'Stadt', 'Wald', 'Gebirge', 'Autobahn', 'Schiene', 'Eis'];
+const TERRAIN_LABEL = ['Wasser', 'Ebene', 'Stadt', 'Wald', 'Gebirge', 'Autobahn', 'Schiene', 'Eis', 'Außerhalb der Karte'];
 const STATUS_LABEL: Record<DiplomaticStatus, string> = { War: 'Krieg', Neutral: 'Neutral', NonAggressionPact: 'Nichtangriffspakt', Alliance: 'Bündnis' };
 const TREATY_LABEL: Record<Treaty, string> = { NonAggressionPact: 'Nichtangriffspakt', Alliance: 'Bündnis', TradeAgreement: 'Handelsabkommen' };
 /** Why an order was refused. */
@@ -103,8 +104,42 @@ const map = new MapLibreMap({
   touchPitch: false,
 });
 map.touchZoomRotate.disableRotation();
-map.keyboard.disableRotation();
+// The keyboard moves the camera through our own handler (WASD and arrows, smoothly), and a fast
+// series of attack clicks must never zoom the map.
+map.keyboard.disable();
+map.doubleClickZoom.disable();
 const mapReady = new Promise<void>((resolve) => map.once('load', () => resolve()));
+
+/**
+ * Real country borders as glowing lines: every border faintly, the outer line of the map's own
+ * countries brightly. Strong behind the menu, subdued during a game.
+ */
+const BORDER_LAYERS = ['borders-all', 'borders-glow', 'borders-pack'];
+let bordersFor: string | null | undefined;
+async function showBorders(pack: MapPackDefinition | null, subdued: boolean): Promise<void> {
+  await mapReady;
+  try {
+    const key = pack?.countries?.length ? pack.id : null;
+    if (!map.getSource('borders')) {
+      map.addSource('borders', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      const before = map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
+      map.addLayer({ id: 'borders-all', type: 'line', source: 'borders', filter: ['==', ['get', 'kind'], 'all'], paint: { 'line-color': '#9fd0ff', 'line-width': 0.8 } }, before);
+      map.addLayer({ id: 'borders-glow', type: 'line', source: 'borders', filter: ['==', ['get', 'kind'], 'pack'], paint: { 'line-color': '#ffd45e', 'line-width': 7, 'line-blur': 6 } }, before);
+      map.addLayer({ id: 'borders-pack', type: 'line', source: 'borders', filter: ['==', ['get', 'kind'], 'pack'], paint: { 'line-color': '#fff1c4', 'line-width': 1.6 } }, before);
+    }
+    if (bordersFor !== key) {
+      bordersFor = key;
+      const data = await borderLines(pack);
+      if (bordersFor === key) map.getSource<GeoJSONSource>('borders')?.setData(data);
+    }
+    const opacity = subdued ? [0.25, 0.3, 0.7] : [0.6, 1, 1];
+    map.setPaintProperty('borders-glow', 'line-width', subdued ? 7 : 12);
+    map.setPaintProperty('borders-pack', 'line-width', subdued ? 1.6 : 2.4);
+    BORDER_LAYERS.forEach((id, i) => map.setPaintProperty(id, 'line-opacity', opacity[i]));
+  } catch (err) {
+    console.warn('country borders unavailable', err);
+  }
+}
 
 let session: Session | null = null;
 /** The multiplayer room, if the player is in one. */
@@ -200,6 +235,10 @@ function showBanner(text: string): void {
   banner.hidden = !text;
 }
 
+const flagOf = (f: Faction) => {
+  const flag = factionFlag(f);
+  return flag ? flagImage(flag).url : undefined;
+};
 const kindLabel = (f: Faction) =>
   f.type === 'HUMAN_NATION' ? 'Spieler' : f.type === 'AI_NATION' ? 'KI-Nation' : f.elite ? 'Elite-Stamm' : 'Stamm';
 
@@ -237,7 +276,7 @@ function showMenu(): void {
   hud.hidden = true;
   $('hover').textContent = ' ';
   $('offers').hidden = true;
-  $('hotbar').hidden = $('troops').hidden = true;
+  $('hotbar').hidden = $('troops').hidden = $('speed').hidden = $('ranking').hidden = true;
   $('alarms').replaceChildren();
   alarmButtons.clear();
   radial.close();
@@ -289,11 +328,10 @@ async function begin(pack: MapPackDefinition, terrain: Uint8Array, seed: number,
     ],
   });
   // Below the basemap's labels, so place names stay readable on top of territories.
-  const firstSymbol = map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
-  map.addLayer(
-    { id: LAYER, type: 'raster', source: LAYER, paint: { 'raster-resampling': 'nearest', 'raster-fade-duration': 0, 'raster-opacity': 0.85 } },
-    firstSymbol,
-  );
+  // The border lines stay on top of the territories.
+  const above = map.getLayer(BORDER_LAYERS[0]) ? BORDER_LAYERS[0] : map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
+  map.addLayer({ id: LAYER, type: 'raster', source: LAYER, paint: { 'raster-resampling': 'nearest', 'raster-fade-duration': 0, 'raster-opacity': 0.85 } }, above);
+  void showBorders(pack, true);
   map.setMinZoom(pack.zoom.min);
   map.setMaxZoom(pack.zoom.max);
   // Room at the bottom for the hotkey bar.
@@ -370,6 +408,7 @@ function flyToSelected(): void {
   map.setMinZoom(0);
   map.setMaxZoom(22);
   map.fitBounds([w, s, e, n], { padding: 40, duration: 1500 });
+  void showBorders(pack, false);
 }
 
 function showMaps(): void {
@@ -539,7 +578,7 @@ async function enterRoom(id: string): Promise<void> {
     if (from !== lobby!.hostId || lobby!.isHost || !start) return;
     const terrain = new Uint8Array(data);
     const proj = validateMapPack(start.pack).length ? null : new GridProjection(start.pack.bbox, start.pack.grid.width);
-    if (!proj || terrain.length !== proj.width * proj.height || terrain.some((t) => t > Terrain.ICE) || !Number.isInteger(start.seed)) {
+    if (!proj || terrain.length !== proj.width * proj.height || terrain.some((t) => t > Terrain.OUT_OF_BOUNDS) || !Number.isInteger(start.seed)) {
       $('lobby-status').textContent = 'Der Host hat eine ungültige Karte gesendet.';
       return;
     }
@@ -613,6 +652,8 @@ function launchProblem(game: Game, mine: Faction, unit: UnitDefinition, cell: nu
 function updateGhost(): void {
   const mine = me();
   ghost = null;
+  // The marks show for as long as a city is being placed, wherever the pointer is.
+  cityMarks = session && mine?.alive && mode?.kind === 'build' && mode.def.settles ? freeCities(session.game) : [];
   if (!session || !mine?.alive || !mode || hoverCell < 0) return;
   const { game } = session;
   if (mode.kind === 'target') {
@@ -638,8 +679,20 @@ function updateGhost(): void {
     if (city >= 0) links.push(city);
     if (result === 'ok') hint = city >= 0 ? `Anschluss an eine Stadt: +${def.linkBonusPct} %` : 'Ohne Straßen-/Schienenanschluss';
   }
+  // A city on a real city merges with it.
+  cityMarks = def.settles ? freeCities(game) : [];
+  const city = def.settles ? game.realCityNear(hoverCell) : null;
+  if (city && result === 'ok') hint = `Standort-Bonus: ${city.name} (${cityBonus(city)})`;
   ghost = { cell: hoverCell, icon: def.icon, ok: result === 'ok', hint, rings, links };
 }
+
+/** Real cities to mark on the map while a city is being placed. */
+let cityMarks: { cell: number; label: string }[] = [];
+const cityBonus = (c: RealCity) => {
+  const t = CITY_TIERS[c.tier];
+  return `+${t.growthPct} % Wachstum${t.incomePct ? `, +${t.incomePct} % Gold` : ''}`;
+};
+const freeCities = (game: Game) => game.cities.filter((c) => !game.buildings.some((b) => b.city === c)).map((c) => ({ cell: c.cell, label: `${c.name} +${CITY_TIERS[c.tier].growthPct} %` }));
 
 const canvasEl = map.getCanvas();
 function updateCursor(): void {
@@ -723,8 +776,86 @@ addEventListener('keydown', (e) => {
   if (!me()?.alive) return;
   const slot = slots.find((s) => s.key === e.key);
   if (slot) toggleSlot(slot);
-  const turn = { q: -10, a: -10, e: 10, d: 10 }[e.key.toLowerCase()];
+  const turn = { q: -10, e: 10 }[e.key.toLowerCase()];
   if (turn) setStrength(Number(strength.value) + turn);
+});
+
+// --- camera keys: WASD and arrows -----------------------------------------------------
+
+const PAN_KEYS: Record<string, [number, number]> = { w: [0, -1], arrowup: [0, -1], s: [0, 1], arrowdown: [0, 1], a: [-1, 0], arrowleft: [-1, 0], d: [1, 0], arrowright: [1, 0] };
+/** Screen pixels per second: the same on every zoom level, so the ground covered follows the zoom. */
+const PAN_SPEED = 700;
+const held = new Set<string>();
+addEventListener('keydown', (e) => {
+  const key = e.key.toLowerCase();
+  if (!(key in PAN_KEYS) || e.ctrlKey || e.metaKey || e.altKey || !session || !menu.hidden || (e.target as HTMLElement).closest?.('input, select, textarea, dialog')) return;
+  e.preventDefault();
+  held.add(key);
+});
+addEventListener('keyup', (e) => held.delete(e.key.toLowerCase()));
+addEventListener('blur', () => held.clear());
+let panAt = 0;
+/** Moves the camera for the keys held down; called once per frame. */
+function panCamera(now: number): void {
+  const dt = Math.min(0.1, (now - panAt) / 1000);
+  panAt = now;
+  if (held.size === 0 || !session || !menu.hidden) return held.clear();
+  let dx = 0;
+  let dy = 0;
+  for (const key of held) {
+    dx += PAN_KEYS[key][0];
+    dy += PAN_KEYS[key][1];
+  }
+  if (dx || dy) map.panBy([dx * PAN_SPEED * dt, dy * PAN_SPEED * dt], { animate: false });
+}
+
+// --- game speed -------------------------------------------------------------------------
+
+const SPEED_LABEL: Record<number, string> = { 0: '⏸', 0.5: '0.5x', 1: '1x', 2: '2x', 4: '4x' };
+const speedButtons = SPEEDS.map((speed) => {
+  const button = Object.assign(document.createElement('button'), { type: 'button', textContent: SPEED_LABEL[speed] });
+  button.dataset.speed = `${speed}`;
+  button.setAttribute('aria-label', speed === 0 ? 'Pause (Leertaste)' : `Geschwindigkeit ${SPEED_LABEL[speed]}`);
+  button.addEventListener('click', () => {
+    setSpeed(speed);
+    button.blur(); // the space bar pauses the game, not this button again
+  });
+  return button;
+});
+$('speed').append(...speedButtons);
+/** The speed to come back to from a pause. */
+let resumeSpeed = 1;
+/** Only the host of a game sets its speed; in a game of one that is the player. */
+function setSpeed(speed: number): void {
+  const ls = session?.lockstep;
+  if (!ls) return;
+  if (!ls.host) return toast('Nur der Host kann das Spieltempo ändern.');
+  if (speed !== 0) resumeSpeed = speed;
+  if (ls.setSpeed(speed)) play('click');
+}
+function refreshSpeed(): void {
+  const ls = session?.lockstep;
+  $('speed').hidden = !ls || !menu.hidden;
+  if (!ls) return;
+  for (const b of speedButtons) {
+    const pressed = `${Number(b.dataset.speed) === ls.speed}`;
+    if (b.getAttribute('aria-pressed') !== pressed) b.setAttribute('aria-pressed', pressed);
+    if (b.disabled !== !ls.host) b.disabled = !ls.host;
+  }
+  const title = ls.host ? 'Leertaste: Pause · + / − : schneller / langsamer' : 'Der Host bestimmt das Spieltempo.';
+  if ($('speed').title !== title) $('speed').title = title;
+}
+addEventListener('keydown', (e) => {
+  const target = e.target as HTMLElement;
+  // A focused button takes the space bar for itself; everything else is ours.
+  if (!session || !menu.hidden || e.ctrlKey || e.metaKey || e.altKey || target.closest?.('input:not([type=range]), select, textarea, dialog') || (e.key === ' ' && target.closest?.('button'))) return;
+  const speed = session.lockstep.speed;
+  const i = SPEEDS.indexOf(speed as (typeof SPEEDS)[number]);
+  if (e.key === ' ') {
+    e.preventDefault();
+    setSpeed(speed === 0 ? resumeSpeed : 0);
+  } else if (e.key === '+' || e.key === '.') setSpeed(SPEEDS[Math.min(SPEEDS.length - 1, i + 1)]);
+  else if (e.key === '-' || e.key === ',') setSpeed(SPEEDS[Math.max(1, i - 1)]);
 });
 // Right click: out of build or target mode - or the context menu, where the pointer is.
 map.on('contextmenu', (e) => {
@@ -777,7 +908,10 @@ map.on('click', (e) => {
   if (!mine.alive) return;
   if (mode?.kind === 'build') {
     const def = mode.def;
-    return order({ type: 'build', def: def.id, cell }, (result) => (result === 'ok' ? `${def.name} gebaut.` : refusal(result)));
+    return order({ type: 'build', def: def.id, cell }, (result) => {
+      const city = s.game.buildingAt.get(cell)?.city;
+      return result !== 'ok' ? refusal(result) : city ? `🏙️ ${city.name} (${CITY_TIERS[city.tier].label}): ${cityBonus(city)}.` : `${def.name} gebaut.`;
+    });
   }
   if (mode?.kind === 'target') {
     const unit = mode.unit;
@@ -792,7 +926,7 @@ map.on('click', (e) => {
     return;
   }
   s.selected = -1;
-  if (game.terrain[cell] === Terrain.WATER) return;
+  if (!isLand(game.terrain[cell])) return;
   const f = game.factions[owner];
   const percent = Number(strength.value);
   if (owner === NEUTRAL) return order({ type: 'attack', target: NEUTRAL, percent }, (result) => (result === 'ok' ? `Vorstoß in freies Land mit ${percent} % deiner Truppen.` : ''));
@@ -821,9 +955,9 @@ map.on('mousemove', (e) => {
   if (cell < 0) hover.textContent = ' ';
   else {
     const f = game.factions[game.owner[cell]];
-    const who = f.id === NEUTRAL ? (game.terrain[cell] === Terrain.WATER ? '' : 'Freies Land · ') : `${f.nation ? `${f.nation.ruler} von ${f.name}` : `${factionIcon(f)} ${f.name}`} (${kindLabel(f)}) · ${formatTroops(f.troops)} Truppen · `;
+    const who = f.id === NEUTRAL ? (isLand(game.terrain[cell]) ? 'Freies Land · ' : '') : `${f.nation ? `${f.nation.ruler} von ${f.name}` : `${factionIcon(f)} ${f.name}`} (${kindLabel(f)}) · ${formatTroops(f.troops)} Truppen · `;
     const b = game.buildingAt.get(cell);
-    hover.textContent = `${who}${TERRAIN_LABEL[game.terrain[cell]]}${b ? ` · ${b.def.icon} ${b.def.name}` : ''}${game.fallout[cell] > game.tick ? ' · verstrahlt' : ''}`;
+    hover.textContent = `${who}${TERRAIN_LABEL[game.terrain[cell]]}${b ? ` · ${b.def.icon} ${b.city ? `${b.city.name} (${CITY_TIERS[b.city.tier].label})` : b.def.name}` : ''}${game.fallout[cell] > game.tick ? ' · verstrahlt' : ''}`;
   }
 });
 map.on('mouseout', () => {
@@ -904,7 +1038,7 @@ function openMenu(cell: number, x: number, y: number): void {
       });
       return {
         title: f.name,
-        image: f.nation ? flagImage(f.nation.flag).url : undefined,
+        image: flagOf(f),
         slider: true,
         info: () => {
           const pact = d.pactLeft(game, mine.id, owner);
@@ -960,7 +1094,7 @@ function openMenu(cell: number, x: number, y: number): void {
     if (owner !== NEUTRAL) items.push({ icon: '✉', label: 'Diplomatie', hint: () => 'Handel, Bündnis, Hilfe', stays: true, run: () => radial.open(x, y, diplomacy()) });
     spec = {
       title: water ? 'Gewässer' : owner === NEUTRAL ? 'Freies Land' : f.name,
-      image: f.nation ? flagImage(f.nation.flag).url : undefined,
+      image: flagOf(f),
       slider: true,
       info: () => (owner === NEUTRAL ? TERRAIN_LABEL[game.terrain[cell]] : `${kindLabel(f)}\n${formatTroops(f.troops)} Truppen`),
       items,
@@ -1130,7 +1264,7 @@ function renderOffers(game: Game, mine: Faction): void {
         order({ type: 'accept', from: o.from, treaty: o.treaty }, (result) => (result === 'ok' ? `${TREATY_LABEL[o.treaty]} mit ${from.name} geschlossen.` : 'Dieses Angebot gilt nicht mehr.')),
       );
       const row = document.createElement('div');
-      row.append(from.nation ? flagElement(from.nation.flag) : factionIcon(from), ` ${from.name} bietet: ${TREATY_LABEL[o.treaty]}`, button);
+      row.append(factionFlag(from) ? flagElement(factionFlag(from)!) : factionIcon(from), ` ${from.name} bietet: ${TREATY_LABEL[o.treaty]}`, button);
       return row;
     }),
   );
@@ -1185,25 +1319,45 @@ function renderHud(): void {
   } else if (!mine) showBanner(tutorial ? '' : 'Wähle dein Startgebiet: Klicke auf freies Land.');
   else if (!mine.alive) endGame(session, false, mine);
   else if (!game.factions.some((f) => f.alive && f !== mine) || mine.cells >= game.landCells * VICTORY_SHARE) endGame(session, true, mine);
-  else showBanner(game.tick === 0 && lobby ? 'Warte auf die Mitspieler – gleich geht es los.' : '');
+  else showBanner(session.lockstep.speed === 0 ? '⏸ Pausiert – Karte, Bau-Planung und Diplomatie bleiben bedienbar.' : game.tick === 0 && lobby ? 'Warte auf die Mitspieler – gleich geht es los.' : '');
 }
 
 function renderLeaderboard(game: Game, mine: Faction | null): void {
+  $('ranking').hidden = false;
   const ranked = game.factions.filter((f) => f.alive).sort((a, b) => b.cells - a.cells || a.id - b.id);
+  const el = (tag: string, className: string, text = '') => Object.assign(document.createElement(tag), { className, textContent: text });
   // The top eight, and every player below them with their true rank.
   $('leaderboard').replaceChildren(
     ...ranked.flatMap((f, i) => {
       if (i >= 8 && f.type !== 'HUMAN_NATION') return [];
-      const li = Object.assign(document.createElement('li'), { value: i + 1 });
-      if (f === mine) li.className = 'me';
-      const swatch = document.createElement('i');
-      swatch.style.background = `rgb(${factionColor(f).join(' ')})`;
-      const name = Object.assign(document.createElement('span'), { textContent: f.nation ? f.name : `${factionIcon(f)} ${f.name}` });
-      li.append(swatch, ...(f.nation ? [flagElement(f.nation.flag)] : []), name, `${f.cells}`);
-      return [li];
+      const row = Object.assign(document.createElement('button'), { type: 'button', className: f === mine ? 'me' : '' });
+      row.dataset.faction = `${f.id}`;
+      const share = (100 * f.cells) / game.landCells;
+      const flag = factionFlag(f);
+      const bar = el('i', 'bar');
+      // Bars are relative to the leader, so that a race at 0.3 % still shows who is ahead.
+      bar.style.width = `${Math.max(4, (100 * f.cells) / ranked[0].cells)}%`;
+      bar.style.background = `rgb(${factionColor(f).join(' ')})`;
+      const land = el('span', 'land', `${share.toFixed(1)} %`);
+      land.prepend(bar);
+      row.append(el('span', 'rank', `${i + 1}`), flag ? flagElement(flag) : el('span', 'flag icon', factionIcon(f)), el('span', 'name', f.name), land, el('span', 'troops', formatTroops(f.troops)), el('span', 'gold', formatTroops(f.gold)));
+      row.title = `${f.name}: ${share.toFixed(1)} % der Landfläche · ${formatTroops(f.troops)} Truppen · ${Math.floor(f.gold)} Gold – Klick fliegt hin`;
+      return [row];
     }),
   );
 }
+// A click on a row flies to that faction's land.
+$('leaderboard').addEventListener('click', (e) => {
+  const id = Number((e.target as HTMLElement).closest<HTMLElement>('[data-faction]')?.dataset.faction);
+  const f = session?.game.factions[id];
+  if (!session || !f?.alive || f.cells === 0) return;
+  const { proj, pack } = session;
+  const [west, north] = proj.lngLat(f.minX, f.minY);
+  const [east, south] = proj.lngLat(f.maxX + 1, f.maxY + 1);
+  // The bounding box only ever grows, so it gives the zoom; the centre of the land held now gives the place.
+  const zoom = Math.min(pack.zoom.max - 0.5, map.cameraForBounds([west, south, east, north], { padding: 120 })?.zoom ?? map.getZoom());
+  map.flyTo({ center: proj.lngLat(f.sumX / f.cells + 0.5, f.sumY / f.cells + 0.5), zoom, duration: 1200 });
+});
 
 /** Plays what happened in the world since the last look: loud if it is on screen, faint if it is not. */
 function hearEvents(s: Session): void {
@@ -1234,9 +1388,7 @@ function repaint(s: Session): void {
   updateCursor();
 }
 
-const TICK_MS = 1000 / TICKS_PER_SECOND;
 let last = performance.now();
-let owed = 0;
 /** Set when the game moved; the next frame repaints. */
 let dirty = false;
 
@@ -1257,15 +1409,10 @@ function advance(): void {
     if (ls.turn(0)) dirty = true;
     const waiting = [ls.selfId, ...(lobby?.net.peers() ?? [])].some((peer) => !ls.players.has(peer));
     s.running = ls.players.size > 0 && (!waiting || now - s.startedAt > SPAWN_WAIT_MS);
-    owed = 0;
     return;
   }
-  // After a stalled tab, catch up a little instead of all at once.
-  owed = Math.min(owed + elapsed, 5 * TICK_MS);
-  for (; owed >= TICK_MS; owed -= TICK_MS) {
-    ls.turn(1);
-    dirty = true;
-  }
+  // The ticks due at the host's speed go out as one turn; while paused only orders and speed changes do.
+  if (ls.turn(ls.due(elapsed))) dirty = true;
 }
 // The clock lives in a worker: timers and animation frames of a background tab are throttled,
 // and a host who switches tabs must not freeze the game for everybody.
@@ -1275,14 +1422,16 @@ clock.onmessage = advance;
 function frame(now: number): void {
   requestAnimationFrame(frame);
   if (!session || menu.hidden === false) return;
+  panCamera(now);
+  refreshSpeed(); // a pause changes no cell, so this cannot wait for a repaint
   if (dirty) {
     dirty = false;
     repaint(session);
   }
   drawLabels(labels, map, session.game, session.proj);
-  drawOverlay(labels, map, session.game, session.proj, { me: me()?.id ?? -1, selected: session.selected, ghost, hint: tutorialHint }, now);
+  drawOverlay(labels, map, session.game, session.proj, { me: me()?.id ?? -1, selected: session.selected, ghost, hint: tutorialHint, cities: cityMarks }, now);
 }
 requestAnimationFrame(frame);
 
 // Handle for the browser console and automated browser tests.
-Object.assign(window, { osmFront: { map, mapRegistry, session: () => session && { ...session, me: me() }, lobby: () => lobby, mode: () => mode, ghost: () => ghost, sounds: played, tutorial: () => tutorial && { index: tutorial.index, step: tutorial.step.id, hint: tutorialHint } } });
+Object.assign(window, { osmFront: { map, mapRegistry, session: () => session && { ...session, me: me() }, lobby: () => lobby, mode: () => mode, ghost: () => ghost, cityMarks: () => cityMarks, sounds: played, tutorial: () => tutorial && { index: tutorial.index, step: tutorial.step.id, hint: tutorialHint } } });

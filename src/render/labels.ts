@@ -2,7 +2,7 @@ import type { Map as MapLibreMap } from 'maplibre-gl';
 import type { Faction } from '../core/faction';
 import type { Game } from '../core/game';
 import type { GridProjection } from '../core/maps/projection';
-import { flagImage } from './flag';
+import { factionFlag, flagImage } from './flag';
 
 /** Compact troop count: 950, 12.3k, 1.2M. */
 export function formatTroops(n: number): string {
@@ -45,20 +45,21 @@ export function drawLabels(ctx: CanvasRenderingContext2D, map: MapLibreMap, game
     const size = Math.max(10, Math.min(tribe ? 15 : 24, span * (tribe ? 0.14 : 0.2)));
     ctx.lineWidth = size / 4;
     ctx.fillStyle = tribe ? '#efe6cf' : '#ffffff';
-    // A self-made nation flies its flag in front of its name; everybody else has the icon of their kind.
+    const flag = factionFlag(f);
+    // A nation with a flag flies it in front of its name; everybody else has the icon of their kind.
     const name = tribe ? f.name : f.name.toUpperCase();
     const lines: [string, string][] = [
-      [`${tribe ? 'italic 500' : '700'} ${size}px system-ui, sans-serif`, f.nation ? name : `${factionIcon(f)} ${name}`],
+      [`${tribe ? 'italic 500' : '700'} ${size}px system-ui, sans-serif`, flag ? name : `${factionIcon(f)} ${name}`],
       [`600 ${size * 0.85}px system-ui, sans-serif`, formatTroops(f.troops)],
     ];
     lines.forEach(([font, text], i) => {
       ctx.font = font;
       let x = p.x;
       const y = p.y + (i - 0.5) * size * 1.15;
-      if (i === 0 && f.nation) {
+      if (i === 0 && flag) {
         const flagW = size * 1.5;
         x += (flagW + size * 0.3) / 2;
-        ctx.drawImage(flagImage(f.nation.flag).canvas, x - ctx.measureText(text).width / 2 - flagW - size * 0.3, y - size / 2, flagW, size);
+        ctx.drawImage(flagImage(flag).canvas, x - ctx.measureText(text).width / 2 - flagW - size * 0.3, y - size / 2, flagW, size);
       }
       ctx.strokeText(text, x, y);
       ctx.fillText(text, x, y);

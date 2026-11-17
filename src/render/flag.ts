@@ -1,4 +1,6 @@
+import type { Faction } from '../core/faction';
 import type { Flag } from '../core/nation';
+import { flagUrl } from './flag-library';
 
 /** Emblems as outlines in a box from -1 to 1 (y down), filled with the emblem colour. */
 const SHAPES: Record<Exclude<Flag['emblem'], 'none' | 'gear' | 'anchor'>, number[]> = {
@@ -118,14 +120,33 @@ const cache = new Map<string, { canvas: HTMLCanvasElement; url: string }>();
 
 /** The flag as a small image, rendered once per design: a canvas for the map, a data URL for the HUD. */
 export function flagImage(flag: Flag): { canvas: HTMLCanvasElement; url: string } {
-  const key = JSON.stringify(flag);
+  const picture = flag.preset ? flagUrl(flag.preset) : undefined;
+  const key = picture ? flag.preset! : JSON.stringify(flag);
   let entry = cache.get(key);
   if (!entry) {
     const canvas = Object.assign(document.createElement('canvas'), { width: 96, height: 64 });
-    drawFlag(canvas.getContext('2d')!, flag, 0, 0, 96, 64);
-    cache.set(key, (entry = { canvas, url: canvas.toDataURL() }));
+    const ctx = canvas.getContext('2d')!;
+    // A library flag is a picture that arrives a moment later; until then the self-made design stands in.
+    drawFlag(ctx, flag, 0, 0, 96, 64);
+    if (picture) {
+      const img = new Image();
+      img.onload = () => {
+        ctx.drawImage(img, 0, 0, 96, 64);
+        ctx.strokeStyle = 'rgb(0 0 0 / 55%)';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(0, 0, 96, 64);
+      };
+      img.src = picture;
+    }
+    cache.set(key, (entry = { canvas, url: picture ?? canvas.toDataURL() }));
   }
   return entry;
+}
+
+/** The flag a faction flies: a player's own, an AI nation's real one, or none. */
+export function factionFlag(f: Faction): Flag | null {
+  if (f.nation) return f.nation.flag;
+  return f.flag ? { layout: 'triH', colors: ['#555555', '#777777', '#555555'], emblem: 'none', emblemColor: '#ffffff', preset: f.flag } : null;
 }
 
 /** An `<img>` of the flag, sized by CSS (`.flag`). */

@@ -30,12 +30,12 @@ export function factionColor(f: Faction): RGB {
 const pack = (r: number, g: number, b: number, a: number) => ((a << 24) | (b << 16) | (g << 8) | r) >>> 0;
 const shade = ([r, g, b]: RGB, k: number, a: number) => pack(Math.min(255, r * k), Math.min(255, g * k), Math.min(255, b * k), a);
 
-// Indexed by terrain id: WATER, PLAINS, URBAN, FOREST, MOUNTAIN, HIGHWAY, RAIL, ICE.
-const TERRAIN_COUNT = 8;
+// Indexed by terrain id: WATER, PLAINS, URBAN, FOREST, MOUNTAIN, HIGHWAY, RAIL, ICE, OUT_OF_BOUNDS.
+const TERRAIN_COUNT = 9;
 /** Brightness of owned land per terrain, so terrain stays readable under a faction colour. */
-const OWNED_SHADE = [1, 1, 1.15, 0.82, 0.66, 1.3, 0.55, 1.4];
-/** Tint of free land. Plains and water stay transparent to show the map underneath. */
-const FREE_TINT = [0, 0, pack(130, 125, 135, 110), pack(46, 120, 60, 95), pack(120, 98, 80, 125), pack(235, 160, 30, 170), pack(70, 70, 80, 170), pack(240, 248, 255, 150)];
+const OWNED_SHADE = [1, 1, 1.15, 0.82, 0.66, 1.3, 0.55, 1.4, 1];
+/** Tint of free land. Plains and water stay transparent to show the map underneath; land outside the map's borders is greyed out. */
+const FREE_TINT = [0, 0, pack(130, 125, 135, 110), pack(46, 120, 60, 95), pack(120, 98, 80, 125), pack(235, 160, 30, 170), pack(70, 70, 80, 170), pack(240, 248, 255, 150), pack(14, 17, 23, 200)];
 /** The whole grid is repainted at least this often, which is what lets expired fallout fade. */
 const FULL_REPAINT_TICKS = 100;
 /** Irradiated no-man's-land after a nuclear strike. */
