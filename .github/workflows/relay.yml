@@ -1,0 +1,36 @@
+name: Deploy relay to Cloudflare
+
+# Publishes relay/worker.js (the multiplayer relay) as a Cloudflare Worker.
+# Needs the repository secret CLOUDFLARE_API_TOKEN (template "Edit Cloudflare Workers");
+# without it the job is skipped. Afterwards set the repository variable RELAY_URL to the
+# worker's address (https://osm-front-relay.<your-subdomain>.workers.dev) and re-run "Deploy to GitHub Pages".
+on:
+  push:
+    branches: [main]
+    paths: ['relay/**', '.github/workflows/relay.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - id: check
+        run: echo "token=${{ secrets.CLOUDFLARE_API_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+      - if: steps.check.outputs.token == 'true'
+        uses: actions/checkout@v5
+      - if: steps.check.outputs.token == 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.check.outputs.token == 'true'
+        run: npm ci
+      - if: steps.check.outputs.token == 'true'
+        working-directory: relay
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

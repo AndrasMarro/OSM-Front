@@ -14,6 +14,7 @@ function hub() {
     const handlers = new Map<string, Handler>();
     nodes.set(id, handlers);
     return {
+      kind: 'local',
       selfId: id,
       peers: () => [...nodes.keys()].filter((k) => k !== id),
       send: (type, data, to, metadata) => {

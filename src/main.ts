@@ -15,7 +15,7 @@ import { isLand, Terrain } from './core/terrain';
 import { unitCost, unitRegistry, type UnitDefinition } from './core/units';
 import { Lobby } from './net/lobby';
 import { Lockstep, SPEEDS, type PlayerCommand } from './net/lockstep';
-import { localTransport, trysteroTransport, type Transport } from './net/transport';
+import { localTransport, relayTransport, trysteroTransport, type Transport } from './net/transport';
 import { borderLines } from './osm/countries';
 import { loadTerrain } from './osm/terrain';
 import { factionFlag, flagElement, flagImage } from './render/flag';
@@ -545,7 +545,16 @@ function renderLobby(): void {
   };
   $('players').replaceChildren(row(lobby.nation, lobby.net.selfId), ...[...lobby.roster].map(([id, p]) => row(p.nation, id)));
   const relays = lobby.net.relays?.();
-  const reach = !relays ? '' : relays.open > 0 ? ` (${relays.open} von ${relays.total} Relays erreichbar)` : ' Kein Relay ist erreichbar: andere Spieler finden diesen Raum gerade nicht.';
+  const reach =
+    lobby.net.kind === 'server'
+      ? relays?.open
+        ? ' (über den OSM-Front-Server)'
+        : ' Die Verbindung zum Server ist abgerissen – Raum neu laden.'
+      : !relays
+        ? ''
+        : relays.open > 0
+          ? ` (Peer-to-Peer, ${relays.open} von ${relays.total} Vermittlungs-Relays erreichbar)`
+          : ' Kein Vermittlungs-Relay ist erreichbar: andere Spieler finden diesen Raum gerade nicht.';
   $('lobby-status').textContent =
     (lobby.isHost
       ? `Schließe dieses Fenster, wähle Karte und Schwierigkeit und drücke „Spiel für alle starten“ (${lobby.roster.size + 1} im Raum).`
@@ -568,7 +577,17 @@ async function enterRoom(id: string): Promise<void> {
   let net: Transport;
   try {
     // `?net=local` connects the tabs of one browser, for development and tests without relays.
-    net = new URLSearchParams(location.search).get('net') === 'local' ? localTransport(id) : await trysteroTransport(id);
+    const params = new URLSearchParams(location.search);
+    // The relay server, if this build knows one (or the address bar names one); peer to peer otherwise,
+    // and as the fallback when the server cannot be reached. `?net=p2p` skips the server.
+    const relay = params.get('relay') ?? import.meta.env.VITE_RELAY_URL;
+    if (params.get('net') === 'local') net = localTransport(id);
+    else if (relay && params.get('net') !== 'p2p') {
+      net = await relayTransport(relay, id).catch((err) => {
+        console.warn('relay server unreachable, falling back to peer-to-peer', err);
+        return trysteroTransport(id);
+      });
+    } else net = await trysteroTransport(id);
   } catch (err) {
     console.error(err);
     $('lobby-status').textContent = 'Die Verbindung zum Raum ist fehlgeschlagen.';

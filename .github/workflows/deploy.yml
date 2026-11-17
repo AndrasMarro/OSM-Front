@@ -26,6 +26,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+        env:
+          # Address of the multiplayer relay (repository variable RELAY_URL); without it players connect peer to peer.
+          VITE_RELAY_URL: ${{ vars.RELAY_URL }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
