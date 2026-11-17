@@ -31,9 +31,18 @@ export interface BuildingDefinition {
   linkBonusPct?: number;
   /** Cells within `radius` cost attackers `defensePct` more and fall `slow` ticks later (Bunker). */
   fort?: { radius: number; defensePct: number; slow: number };
-  /** Shoots down flying units nearby (SAMSite). */
+  /** Shoots down flying units nearby (SAMSite). Its radius grows with the building's level. */
   intercept?: InterceptSpec;
+  /** Ticks after it is put up before it works (SAMSite: the battery has to be set up). */
+  arming?: number;
+  /** Launches from here draw on a magazine of one shot per level, refilled `reload` ticks after the first shot (MissileSilo). */
+  magazine?: { reload: number };
+  /** Supplies the faction's other buildings within `radius` (plus 2 per level): they work `pct` percent better (Factory). */
+  supply?: { radius: number; pct: number };
 }
+
+/** Every building can be upgraded this far. */
+export const MAX_LEVEL = 4;
 
 export interface Building {
   id: number;
@@ -50,19 +59,28 @@ export interface Building {
   readyAt: number;
   /** The real city this building has merged with, if any. */
   city: RealCity | null;
+  /** Tick from which it works at all (`def.arming`); before that its air defence is silent. */
+  armedAt: number;
+  /** 1 to MAX_LEVEL. Raises its effect, its reach and its hit points. */
+  level: number;
+  /** Shots left in the magazine (`def.magazine`). */
+  charges: number;
+  /** Cell of the factory that supplies it, or -1, and the bonus in percent it gets from it. Refreshed with the economy. */
+  supplier: number;
+  boost: number;
 }
 
-export type OrderResult = 'ok' | 'gold' | 'place' | 'spacing' | 'coast' | 'base' | 'range' | 'target' | 'troops';
+export type OrderResult = 'ok' | 'gold' | 'place' | 'spacing' | 'coast' | 'base' | 'range' | 'target' | 'troops' | 'reload' | 'level';
 
 export type BuildingRegistry = Registry<BuildingDefinition>;
 export const buildingRegistry: BuildingRegistry = new Registry<BuildingDefinition>();
 
 buildingRegistry.register({ id: 'City', name: 'Stadt', icon: '⌂', cost: 250, hp: 4, capacity: 2500, growthPct: 15, settles: true });
-buildingRegistry.register({ id: 'Factory', name: 'Fabrik', icon: '⚙', cost: 200, hp: 3, income: 0.4, linkBonusPct: 50 });
+buildingRegistry.register({ id: 'Factory', name: 'Fabrik', icon: '⚙', cost: 200, hp: 3, income: 0.4, linkBonusPct: 50, supply: { radius: 10, pct: 25 } });
 buildingRegistry.register({ id: 'Bunker', name: 'Bunker', icon: '♜', cost: 150, hp: 5, fort: { radius: 6, defensePct: 200, slow: 4 } });
 buildingRegistry.register({ id: 'Port', name: 'Hafen', icon: '⚓', cost: 200, hp: 3, coastal: true });
 buildingRegistry.register({ id: 'Airfield', name: 'Fliegerhorst', icon: '✈', cost: 400, hp: 3 });
-buildingRegistry.register({ id: 'MissileSilo', name: 'Raketensilo', icon: '☢', cost: 800, hp: 4 });
+buildingRegistry.register({ id: 'MissileSilo', name: 'Raketensilo', icon: '☢', cost: 800, hp: 4, magazine: { reload: 300 } });
 buildingRegistry.register({
   id: 'SAMSite',
   name: 'SAM-Stellung',
@@ -70,6 +88,7 @@ buildingRegistry.register({
   cost: 500,
   hp: 2,
   intercept: { radius: 14, cooldown: 80, chancePct: 100, domains: ['air', 'missile'] },
+  arming: 150,
 });
 
 /** What merging with a real city is worth, by tier: extra population growth and tax income in percent. */
@@ -80,6 +99,44 @@ export const CITY_TIERS: Record<1 | 2 | 3, { label: string; growthPct: number; i
 };
 /** Buildings add up to at most this much extra growth. */
 const MAX_GROWTH_PCT = 150;
+// --- levels and supply -----------------------------------------------------
+
+/** How much a level and a supplying factory scale a building's effect: level 1 is 1, every level adds half. */
+const strength = (b: Building) => ((1 + (b.level - 1) / 2) * (100 + b.boost)) / 100;
+
+/** Reach of a radius that grows with the level: a quarter more per level (14 cells at level 1, 24.5 at level 4). */
+export const reach = (b: Building, radius: number) => (radius * (3 + b.level)) / 4;
+
+/** Cooldowns and reloads of a supplied building run faster by the supply bonus. */
+export const pace = (b: Building, ticks: number) => Math.ceil((ticks * 100) / (100 + b.boost));
+
+/** Supply radius of a factory at its level. */
+export const supplyRadius = (b: Building) => (b.def.supply ? b.def.supply.radius + 2 * (b.level - 1) : 0);
+
+/** What upgrading this building to the next level costs: its base price times its current level. */
+export const upgradeCost = (b: Building) => b.def.cost * b.level;
+
+/** Whether the faction could upgrade the building on this cell right now. Changes nothing. */
+export function canUpgrade(g: Game, factionId: number, cell: number): OrderResult {
+  const b = g.buildingAt.get(cell);
+  if (!b || b.owner !== factionId || !g.factions[factionId]?.alive) return 'place';
+  if (b.level >= MAX_LEVEL) return 'level';
+  return g.factions[factionId].gold < upgradeCost(b) ? 'gold' : 'ok';
+}
+
+/** Raises a building one level: more effect and reach, one more hit point, one more shot in its magazine. */
+export function upgrade(g: Game, factionId: number, cell: number): OrderResult {
+  const check = canUpgrade(g, factionId, cell);
+  if (check !== 'ok') return check;
+  const b = g.buildingAt.get(cell)!;
+  g.factions[factionId].gold -= upgradeCost(b);
+  b.level++;
+  b.hp++;
+  if (b.def.magazine) b.charges++;
+  g.dirty = true;
+  return 'ok';
+}
+
 /** Minimum distance between two buildings, in cells (Chebyshev). */
 const SPACING = 2;
 /** A fort may hold a front up by at most this many ticks; the attack scheduler has no room for more. */
@@ -116,7 +173,16 @@ export function build(g: Game, factionId: number, defId: string, cell: number): 
   if (check !== 'ok') return check;
   const def = buildingRegistry.get(defId)!;
   g.factions[factionId].gold -= price(g, factionId, def);
-  const b: Building = { id: g.nextId++, def, owner: factionId, cell, hp: def.hp, linked: false, intercept: def.intercept, interceptors: def.intercept ? 1 : 0, readyAt: 0, city: def.settles ? g.realCityNear(cell) : null };
+  const b: Building = { id: g.nextId++, def, owner: factionId, cell, hp: def.hp, linked: false, intercept: def.intercept, interceptors: def.intercept ? 1 : 0,
+    // A battery that has to be set up first is not ready until then.
+    readyAt: def.arming ? g.tick + def.arming : 0,
+    armedAt: def.arming ? g.tick + def.arming : 0,
+    city: def.settles ? g.realCityNear(cell) : null,
+    level: 1,
+    charges: def.magazine ? 1 : 0,
+    supplier: -1,
+    boost: 0,
+  };
   g.buildings.push(b);
   g.buildingAt.set(cell, b);
   g.dirty = true;
@@ -168,8 +234,9 @@ export function linkedCity(g: Game, owner: number, from: number): number {
  * once after a building changed hands.
  */
 export function refreshEconomy(g: Game): void {
-  const restamp = g.dirty;
   const relink = g.dirty || g.tick % 100 === 0;
+  // Forts depend on level and supply, so they are restamped whenever links are.
+  const restamp = relink;
   g.dirty = false;
   for (const f of g.factions) {
     const r = rulesOf(f);
@@ -184,25 +251,50 @@ export function refreshEconomy(g: Game): void {
     g.fortSlow.fill(0);
   }
   const { width: w, height: h } = g;
+  // Supply: each building is served by the nearest factory of its owner that reaches it.
+  // ponytail: factories x buildings per refresh; index factories per owner if empires grow past a few hundred buildings.
+  if (relink) {
+    const factories = g.buildings.filter((b) => b.def.supply);
+    for (const b of g.buildings) {
+      b.supplier = -1;
+      b.boost = 0;
+      if (b.def.supply) continue;
+      let best = Infinity;
+      for (const fac of factories) {
+        if (fac.owner !== b.owner) continue;
+        const dx = (fac.cell % w) - (b.cell % w);
+        const dy = Math.floor(fac.cell / w) - Math.floor(b.cell / w);
+        const d2 = dx * dx + dy * dy;
+        const r = supplyRadius(fac);
+        if (d2 <= r * r && d2 < best) {
+          best = d2;
+          b.supplier = fac.cell;
+          b.boost = fac.def.supply!.pct;
+        }
+      }
+    }
+  }
   for (const b of g.buildings) {
     const f = g.factions[b.owner];
     const d = b.def;
-    f.cityCapacity += d.capacity ?? 0;
-    f.growthPct = Math.min(MAX_GROWTH_PCT, f.growthPct + (d.growthPct ?? 0) + (b.city ? CITY_TIERS[b.city.tier].growthPct : 0));
+    const k = strength(b);
+    if (d.magazine && b.charges < b.level && g.tick >= b.readyAt) b.charges = b.level; // reloaded
+    f.cityCapacity += (d.capacity ?? 0) * k;
+    f.growthPct = Math.min(MAX_GROWTH_PCT, f.growthPct + (d.growthPct ?? 0) * k + (b.city ? CITY_TIERS[b.city.tier].growthPct : 0));
     if (b.city) f.income += ((rulesOf(f).income + f.cells * rulesOf(f).cellIncome) * CITY_TIERS[b.city.tier].incomePct) / 100;
     if (d.income) {
       if (relink) b.linked = linkedCity(g, b.owner, b.cell) >= 0;
-      f.income += (d.income * (100 + (b.linked ? (d.linkBonusPct ?? 0) : 0)) * (100 + f.bonus.factoryIncomePct)) / 10000;
+      f.income += (d.income * (1 + (b.level - 1) / 2) * (100 + (b.linked ? (d.linkBonusPct ?? 0) : 0)) * (100 + f.bonus.factoryIncomePct)) / 10000;
     }
     if (restamp && d.fort) {
-      const r = d.fort.radius;
+      const r = d.fort.radius + b.level - 1;
       const cx = b.cell % w;
       const cy = (b.cell - cx) / w;
       for (let y = Math.max(0, cy - r); y <= Math.min(h - 1, cy + r); y++) {
         for (let x = Math.max(0, cx - r); x <= Math.min(w - 1, cx + r); x++) {
           if ((x - cx) * (x - cx) + (y - cy) * (y - cy) > r * r) continue;
           g.fortOwner[y * w + x] = b.owner;
-          g.fortPct[y * w + x] = d.fort.defensePct;
+          g.fortPct[y * w + x] = Math.round(d.fort.defensePct * k);
           g.fortSlow[y * w + x] = Math.min(MAX_FORT_SLOW, d.fort.slow);
         }
       }

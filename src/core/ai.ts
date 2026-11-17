@@ -1,4 +1,4 @@
-import { build, buildingRegistry, price, type OrderResult } from './buildings';
+import { build, buildingRegistry, MAX_LEVEL, price, upgrade, upgradeCost, type OrderResult } from './buildings';
 import { rulesOf, type Faction } from './faction';
 import { NEUTRAL, type Game } from './game';
 import { isLand } from './terrain';
@@ -120,6 +120,10 @@ function develop(g: Game, f: Faction): void {
     const result = site(g, f, id);
     if (result === 'ok' || result === 'gold') return; // built it, or saving up for it
   }
+  // Nothing left to build for now: the cheapest upgrade, once the treasury has twice its price.
+  let best: (typeof g.buildings)[number] | undefined;
+  for (const b of g.buildings) if (b.owner === f.id && b.level < MAX_LEVEL && (!best || upgradeCost(b) < upgradeCost(best))) best = b;
+  if (best && f.gold >= upgradeCost(best) * 2) upgrade(g, f.id, best.cell);
 }
 
 /** Builds on a random own cell; coastal buildings walk from there to the shore first. */
@@ -194,7 +198,6 @@ function operate(g: Game, f: Faction): void {
   const port = g.buildings.find((b) => b.owner === f.id && b.def.id === 'Port');
   if (!port) return;
   const afloat = (id: string) => g.units.some((u) => u.owner === f.id && u.def.id === id);
-  if (!afloat('TradeShip') && launch(g, f.id, 'TradeShip', port.cell) === 'ok') return;
   if (enemy && !afloat('Warship') && launch(g, f.id, 'Warship', port.cell) === 'ok') return;
 
   // Invasion: the enemy's coast, or free land once there is none left to walk to.

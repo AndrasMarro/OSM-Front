@@ -1,4 +1,4 @@
-import { build, type OrderResult } from './buildings';
+import { build, upgrade, type OrderResult } from './buildings';
 import type { Treaty } from './diplomacy';
 import type { Game } from './game';
 import { launch } from './units';
@@ -11,6 +11,8 @@ import { launch } from './units';
 export type Command =
   | { type: 'attack'; target: number; percent: number }
   | { type: 'build'; def: string; cell: number }
+  /** Raises the faction's building on this cell one level. */
+  | { type: 'upgrade'; cell: number }
   | { type: 'launch'; unit: string; cell: number; percent: number }
   | { type: 'propose'; to: number; treaty: Treaty }
   | { type: 'accept'; from: number; treaty: Treaty }
@@ -41,6 +43,9 @@ export function execute(g: Game, factionId: number, cmd: Command): CommandResult
     case 'build':
       if (typeof cmd.def !== 'string' || !int(cmd.cell, 0, lastCell)) return 'refused';
       return build(g, factionId, cmd.def, cmd.cell);
+    case 'upgrade':
+      if (!int(cmd.cell, 0, lastCell)) return 'refused';
+      return upgrade(g, factionId, cmd.cell);
     case 'launch':
       if (typeof cmd.unit !== 'string' || !int(cmd.cell, 0, lastCell) || !int(cmd.percent, 0, 100)) return 'refused';
       return launch(g, factionId, cmd.unit, cmd.cell, cmd.percent);

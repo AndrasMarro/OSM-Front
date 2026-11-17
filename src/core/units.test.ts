@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { build } from './buildings';
+import { build, upgrade } from './buildings';
 import { NEUTRAL } from './game';
 import { Terrain } from './terrain';
 import { at, human, run, world } from './testkit';
@@ -89,20 +89,27 @@ describe('navy', () => {
     expect(a.troops).toBeLessThan(5000); // the army went down with the ship
   });
 
-  it('runs a trade ship between two ports and pays both', () => {
+  it('sends trade ships from the ports on their own, pays both ends and stops at war', () => {
     const { g, a, b } = strait();
     build(g, b.id, 'Port', at(g, 50, 15));
-    g.step();
-    expect(launch(g, a.id, 'TradeShip', at(g, 29, 15))).toBe('ok');
+    expect(launch(g, a.id, 'TradeShip', at(g, 29, 15))).toBe('target'); // not for sale
     const gold = [a.gold, b.gold];
-    run(g, 60);
-    const earned = [a.gold - gold[0] - a.income * 60, b.gold - gold[1] - b.income * 60];
-    expect(earned[0]).toBeCloseTo(20 + 0.5 * 19);
-    expect(earned[1]).toBeCloseTo(earned[0] / 2);
-    expect(g.units.length).toBe(1); // on its way back
+    const income = [0, 0];
+    let ships = 0;
+    for (let i = 0; i < 400; i++) {
+      g.step();
+      income[0] += a.income;
+      income[1] += b.income;
+      ships = Math.max(ships, g.units.filter((u) => u.def.trade).length);
+    }
+    expect(ships).toBeGreaterThanOrEqual(2); // both ports sent one
+    const earned = [a.gold - gold[0] - income[0], b.gold - gold[1] - income[1]];
+    // Each side: at least its own run (20 + 0.5 per cell) and half of the other side's.
+    expect(earned[0]).toBeGreaterThanOrEqual((20 + 0.5 * 19) * 1.5 - 0.01);
+    expect(earned[1]).toBeGreaterThanOrEqual((20 + 0.5 * 19) * 1.5 - 0.01);
     g.diplo.hostile(g, a.id, b.id);
-    run(g, 60);
-    expect(g.units.length).toBe(0); // war closes the route
+    run(g, 120);
+    expect(g.units.filter((u) => u.def.trade).length).toBe(0); // war closes the route
   });
 });
 
@@ -116,7 +123,7 @@ describe('air force and missiles', () => {
     build(g, a.id, 'Airfield', at(g, 13, 15));
     build(g, b.id, 'City', at(g, 73, 15));
     if (sam) expect(build(g, b.id, 'SAMSite', at(g, 70, 15))).toBe('ok');
-    g.step();
+    run(g, sam ? 150 : 1); // a SAM battery has to be set up first
     return { g, a, b, city: g.buildingAt.get(at(g, 73, 15))! };
   }
   const types = (g: ReturnType<typeof world>) => g.events.map((e) => e.type);
@@ -151,10 +158,12 @@ describe('air force and missiles', () => {
     expect(types(g)).toEqual(['intercept']);
     expect(city.hp).toBe(4);
 
-    // Two at once: the second one arrives while the launcher reloads.
-    run(g, 100);
-    launch(g, a.id, 'Missile', city.cell);
-    launch(g, a.id, 'Missile', city.cell);
+    // Two at once from a silo of level 2: the second one arrives while the SAM site reloads.
+    run(g, 300);
+    a.gold = 100_000;
+    expect(upgrade(g, a.id, at(g, 10, 15))).toBe('ok');
+    expect(launch(g, a.id, 'Missile', city.cell)).toBe('ok');
+    expect(launch(g, a.id, 'Missile', city.cell)).toBe('ok');
     run(g, 15);
     expect(types(g).sort()).toEqual(['explosion', 'intercept']);
     expect(city.hp).toBe(1);

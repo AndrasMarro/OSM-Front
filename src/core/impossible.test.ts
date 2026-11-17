@@ -26,7 +26,7 @@ function duel(difficulty: Difficulty, seed: number) {
  * Plays the duel with a scripted player, one decision every two seconds like the AI.
  * The naive one only expands. The clever one does what the level asks for: trade,
  * gifts and a pact to buy time, bunkers and a rally point on the neck, cities and SAM
- * sites behind it - and it strikes once it is clearly the stronger side.
+ * sites behind it, upgrades - and it strikes once it is clearly the stronger side.
  */
 function play(difficulty: Difficulty, clever: boolean, seed: number, ticks: number) {
   const { g, me, ai } = duel(difficulty, seed);
@@ -45,6 +45,8 @@ function play(difficulty: Difficulty, clever: boolean, seed: number, ticks: numb
         if (mine(46, 20)) cmd({ type: 'rally', cell: at(g, 46, 20) });
         for (const [x, y] of [[36, 8], [36, 32], [34, 20], [28, 8], [28, 32], [26, 20], [30, 14], [30, 26]]) if (mine(x, y)) cmd({ type: 'build', def: 'City', cell: at(g, x, y) });
         for (const [x, y] of [[38, 14], [38, 26], [30, 20]]) if (mine(x, y) && me.gold > 900) cmd({ type: 'build', def: 'SAMSite', cell: at(g, x, y) });
+        // Upgrades: cities first, then the bunkers on the neck.
+        for (const b of g.buildings) if (b.owner === me.id && (b.def.capacity || b.def.fort)) cmd({ type: 'upgrade', cell: b.cell });
         if (me.neighbors.includes(ai.id) && ((status === 'War' && me.troops > ai.troops) || (status === 'Neutral' && ready))) cmd({ type: 'attack', target: ai.id, percent: 50 });
       }
     }

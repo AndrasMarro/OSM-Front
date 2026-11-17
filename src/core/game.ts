@@ -28,7 +28,7 @@ const EVENT_TICKS = 40;
 
 /** Something worth showing: explosions, interceptions, landings. No effect on the simulation. */
 export interface GameEvent {
-  type: 'explosion' | 'nuke' | 'intercept' | 'landing' | 'repelled' | 'hit' | 'sunk';
+  type: 'explosion' | 'nuke' | 'intercept' | 'landing' | 'repelled' | 'hit' | 'sunk' | 'captured';
   cell: number;
   radius: number;
   tick: number;

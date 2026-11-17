@@ -1,4 +1,4 @@
-import { damage, type Building, type OrderResult } from './buildings';
+import { damage, pace, reach, type Building, type OrderResult } from './buildings';
 import { NEUTRAL, type Game } from './game';
 import { Registry } from './registry';
 import { isLand, Terrain } from './terrain';
@@ -38,10 +38,19 @@ export interface UnitDefinition {
   carriesTroops?: boolean;
   /** Explodes at the target. `troopsPct` of a faction's troops are lost if the whole blast hits it. */
   blast?: { radius: number; buildingDamage: number; troopsPct: number; neutralize?: boolean };
-  /** Patrols and fires on enemy ships and shores (warship). */
-  guns?: { radius: number; cooldown: number; troops: number };
-  /** Shuttles to a foreign port and earns gold per run (trade ship). */
+  /**
+   * Patrols and fires on enemy ships and shores (warship). An enemy trade ship in range is seized instead,
+   * after which the guns rest `captureCooldown` ticks. Every warship it sinks raises its level (up to `maxLevel`),
+   * worth `hpPerLevel` more hit points.
+   */
+  guns?: { radius: number; cooldown: number; troops: number; captureCooldown: number; maxLevel: number; hpPerLevel: number };
+  /** Sails to a foreign port and earns gold for the run (trade ship). */
   trade?: { gold: number; perCell: number };
+  /**
+   * Not for sale: every base sends one out on its own every `every` ticks - divided by its level - as long
+   * as it has fewer than its level of them at sea (trade ships leaving a port).
+   */
+  auto?: { every: number };
   /** Stays at its base and intercepts (fighter). */
   intercept?: InterceptSpec;
 }
@@ -67,14 +76,27 @@ export interface Unit {
   y: number;
   /** Guns: tick of the next shot. */
   readyAt: number;
+  /** Rises when a warship sinks another one. */
+  level: number;
 }
 
 export type UnitRegistry = Registry<UnitDefinition>;
 export const unitRegistry: UnitRegistry = new Registry<UnitDefinition>();
 
 unitRegistry.register({ id: 'TransportShip', name: 'Truppentransporter', icon: '⛵', cost: 60, base: 'Port', domain: 'sea', speed: 0.5, range: 400, hp: 2, carriesTroops: true });
-unitRegistry.register({ id: 'Warship', name: 'Kriegsschiff', icon: '☸', cost: 250, base: 'Port', domain: 'sea', speed: 0.5, range: 400, hp: 4, guns: { radius: 7, cooldown: 15, troops: 40 } });
-unitRegistry.register({ id: 'TradeShip', name: 'Handelsschiff', icon: '⚖', cost: 150, base: 'Port', domain: 'sea', speed: 0.4, range: 400, hp: 1, trade: { gold: 20, perCell: 0.5 } });
+unitRegistry.register({
+  id: 'Warship',
+  name: 'Kriegsschiff',
+  icon: '☸',
+  cost: 250,
+  base: 'Port',
+  domain: 'sea',
+  speed: 0.5,
+  range: 400,
+  hp: 4,
+  guns: { radius: 7, cooldown: 15, troops: 40, captureCooldown: 100, maxLevel: 4, hpPerLevel: 2 },
+});
+unitRegistry.register({ id: 'TradeShip', name: 'Handelsschiff', icon: '⚖', cost: 0, base: 'Port', domain: 'sea', speed: 0.4, range: 400, hp: 1, trade: { gold: 20, perCell: 0.5 }, auto: { every: 200 } });
 unitRegistry.register({
   id: 'Fighter',
   name: 'Jäger', icon: '➹',
@@ -170,11 +192,15 @@ export function unitCost(g: Game, factionId: number, def: UnitDefinition): numbe
 export function launch(g: Game, factionId: number, unitId: string, target: number, percent = 0): OrderResult {
   const def = unitRegistry.get(unitId);
   const f = g.factions[factionId];
-  if (!def || !f?.alive || target < 0 || target >= g.owner.length) return 'target';
+  // Units that sail on their own are not for sale.
+  if (!def || def.auto || !f?.alive || target < 0 || target >= g.owner.length) return 'target';
   const cost = unitCost(g, factionId, def);
   if (f.gold < cost) return 'gold';
-  const bases = g.buildings.filter((b) => b.owner === factionId && b.def.id === def.base).sort((a, b) => chebyshev(g, a.cell, target) - chebyshev(g, b.cell, target) || a.id - b.id);
-  if (bases.length === 0) return 'base';
+  const all = g.buildings.filter((b) => b.owner === factionId && b.def.id === def.base);
+  if (all.length === 0) return 'base';
+  // A magazine that is empty is reloading.
+  const bases = all.filter((b) => !b.def.magazine || b.charges > 0).sort((a, b) => chebyshev(g, a.cell, target) - chebyshev(g, b.cell, target) || a.id - b.id);
+  if (bases.length === 0) return 'reload';
 
   if (def.intercept) {
     // Stationed at the base; several of them shorten its reload.
@@ -190,20 +216,7 @@ export function launch(g: Game, factionId: number, unitId: string, target: numbe
   let to = target;
   if (def.domain === 'sea') {
     let goal: (cell: number) => boolean;
-    if (def.trade) {
-      // The nearest port of someone we are neither fighting nor boycotting.
-      goal = (cell) => {
-        let found = false;
-        g.eachNeighbor(cell, (n) => {
-          const port = g.buildingAt.get(n);
-          if (!found && port?.def.id === def.base && port.owner !== factionId && g.diplo.status(g, factionId, port.owner) !== 'War' && !g.diplo.embargoed(factionId, port.owner)) {
-            found = true;
-            to = n;
-          }
-        });
-        return found;
-      };
-    } else if (def.carriesTroops) {
+    if (def.carriesTroops) {
       // Troops need a foreign or free shore: the clicked cell, or the nearest one - of the same owner, if there is one.
       const shore = (c: number) => isLand(g.terrain[c]) && g.owner[c] !== factionId && g.touchesWater(c);
       to = water ? -1 : g.nearest(target, 6, (c) => g.owner[c] === g.owner[target] && shore(c));
@@ -234,6 +247,11 @@ export function launch(g: Game, factionId: number, unitId: string, target: numbe
     f.troops -= troops;
   }
   f.gold -= cost;
+  if (base!.def.magazine) {
+    // The reload starts with the first shot of a full magazine.
+    if (base!.charges === base!.level) base!.readyAt = g.tick + pace(base!, base!.def.magazine.reload);
+    base!.charges--;
+  }
   // A patrol in open water or a trade run threatens nobody; everything else aimed at a faction does.
   const targetOwner = def.trade ? 0 : g.owner[def.guns ? target : to];
   if (targetOwner && targetOwner !== factionId) g.diplo.hostile(g, factionId, targetOwner);
@@ -253,14 +271,44 @@ export function launch(g: Game, factionId: number, unitId: string, target: numbe
     x: start % g.width,
     y: Math.floor(start / g.width),
     readyAt: 0,
+    level: 1,
   });
   return 'ok';
 }
+
+/** Ports (and any other base of a unit with `auto`) send out their own ships, free of charge. */
+function dispatch(g: Game): void {
+  for (const def of unitRegistry.list()) {
+    if (!def.auto || !def.trade) continue;
+    for (const b of g.buildings) {
+      // Staggered by building id; more often at a higher level and with supply.
+      if (b.def.id !== def.base || (g.tick + b.id * 7) % pace(b, Math.ceil(def.auto.every / b.level)) !== 0) continue;
+      let afloat = 0;
+      for (const u of g.units) if (u.def === def && u.from === b.cell) afloat++;
+      if (afloat >= b.level) continue;
+      let to = -1;
+      // The nearest port of someone the owner is neither fighting nor boycotting.
+      const path = seaRoute(g, b.cell, def.range, (cell) => {
+        g.eachNeighbor(cell, (n) => {
+          const port = g.buildingAt.get(n);
+          if (to < 0 && port?.def.id === def.base && port.owner !== b.owner && g.diplo.status(g, b.owner, port.owner) !== 'War' && !g.diplo.embargoed(b.owner, port.owner)) to = n;
+        });
+        return to >= 0;
+      });
+      if (!path) continue;
+      g.units.push({ id: g.nextId++, def, owner: b.owner, hp: def.hp, troops: 0, targetOwner: 0, from: b.cell, to, path, progress: 0, steps: 0, x: path[0] % g.width, y: Math.floor(path[0] / g.width), readyAt: 0, level: 1 });
+    }
+  }
+}
+
+/** What a trade run along `path` is worth. */
+const cargo = (u: Unit) => u.def.trade!.gold + u.def.trade!.perCell * (u.path!.length - 1);
 
 // --- simulation ------------------------------------------------------------
 
 /** Moves every unit by one tick and resolves arrivals, gunfire and interceptions. */
 export function stepUnits(g: Game): void {
+  if (g.buildings.length > 0) dispatch(g);
   if (g.units.length === 0) return;
   for (const u of g.units) {
     if (u.hp <= 0) continue; // sunk earlier this tick
@@ -287,31 +335,30 @@ function sail(g: Game, u: Unit): void {
     g.emit(g.land(u.owner, u.to, u.troops) ? 'landing' : 'repelled', u.to, 2);
     u.hp = 0;
   } else if (u.def.trade) {
-    // Paid at both ends of the run: the far port earns half as much.
+    // One run, paid on arrival: the far port earns half as much. Then the ship is done.
+    u.hp = 0;
     const port = g.buildingAt.get(u.to);
-    const home = g.buildingAt.get(u.from);
-    if (!port || !home || home.owner !== u.owner || port.owner === u.owner || g.diplo.status(g, u.owner, port.owner) === 'War' || g.diplo.embargoed(u.owner, port.owner)) {
-      u.hp = 0; // the route is closed
-      return;
-    }
-    const gold = u.def.trade.gold + u.def.trade.perCell * end;
+    if (!port || port.owner === u.owner || g.diplo.status(g, u.owner, port.owner) === 'War' || g.diplo.embargoed(u.owner, port.owner)) return; // the route closed
+    const gold = cargo(u);
     g.factions[u.owner].gold += gold;
     g.factions[port.owner].gold += gold / 2;
     g.diplo.adjust(u.owner, port.owner, 1);
-    path.reverse();
-    u.progress = 0;
   }
 }
 
-/** One salvo: at the nearest enemy ship, otherwise (on station) at the nearest enemy shore. */
+/**
+ * One salvo: at the nearest enemy ship, otherwise (on station) at the nearest enemy shore.
+ * An enemy trade ship is not sunk but seized - also under an embargo - and the guns then rest a while.
+ */
 function fire(g: Game, u: Unit, onStation: boolean): void {
   const guns = u.def.guns!;
   const r2 = guns.radius * guns.radius;
   const atWar = (other: number) => other !== u.owner && other !== NEUTRAL && g.diplo.status(g, u.owner, other) === 'War';
+  const prey = (o: Unit) => (o.def.trade ? atWar(o.owner) || (o.owner !== u.owner && g.diplo.embargoed(u.owner, o.owner)) : atWar(o.owner));
   let ship: Unit | undefined;
   let best = r2 + 1;
   for (const o of g.units) {
-    if (!o.path || o.hp <= 0 || !atWar(o.owner)) continue;
+    if (!o.path || o.hp <= 0 || !prey(o)) continue;
     const d = (o.x - u.x) * (o.x - u.x) + (o.y - u.y) * (o.y - u.y);
     if (d < best) {
       best = d;
@@ -319,8 +366,23 @@ function fire(g: Game, u: Unit, onStation: boolean): void {
     }
   }
   if (ship) {
+    const at = Math.floor(ship.y) * g.width + Math.floor(ship.x);
+    if (ship.def.trade) {
+      // Seized: the cargo goes to the captor.
+      ship.hp = 0;
+      g.factions[u.owner].gold += cargo(ship);
+      g.diplo.adjust(u.owner, ship.owner, -5);
+      g.emit('captured', at, 2);
+      u.readyAt = g.tick + guns.captureCooldown;
+      return;
+    }
     ship.hp--;
-    g.emit(ship.hp <= 0 ? 'sunk' : 'hit', Math.floor(ship.y) * g.width + Math.floor(ship.x), 2);
+    g.emit(ship.hp <= 0 ? 'sunk' : 'hit', at, 2);
+    // A warship that sinks another one gains a level and with it a thicker hull.
+    if (ship.hp <= 0 && ship.def.guns && u.level < guns.maxLevel) {
+      u.level++;
+      u.hp += guns.hpPerLevel;
+    }
     u.readyAt = g.tick + guns.cooldown;
     return;
   }
@@ -346,12 +408,13 @@ function fly(g: Game, u: Unit): void {
   for (const b of g.buildings) {
     const spec = b.intercept;
     if (!spec || b.readyAt > g.tick || b.owner === u.owner || !spec.domains.includes(u.def.domain)) continue;
+    const r = reach(b, spec.radius);
     // Defends its owner, its owner's allies, and against anyone its owner is at war with.
     if (b.owner !== u.targetOwner && !g.diplo.allied(b.owner, u.targetOwner) && g.diplo.status(g, b.owner, u.owner) !== 'War') continue;
     const dx = (b.cell % w) - u.x;
     const dy = Math.floor(b.cell / w) - u.y;
-    if (dx * dx + dy * dy > spec.radius * spec.radius) continue;
-    b.readyAt = g.tick + Math.ceil(spec.cooldown / Math.max(1, b.interceptors));
+    if (dx * dx + dy * dy > r * r) continue;
+    b.readyAt = g.tick + pace(b, Math.ceil(spec.cooldown / Math.max(1, b.interceptors)));
     if (g.rng() * 100 < spec.chancePct) {
       u.hp = 0;
       g.emit('intercept', Math.floor(u.y) * w + Math.floor(u.x), 3);
