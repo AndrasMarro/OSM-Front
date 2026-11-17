@@ -29,6 +29,8 @@ export interface Faction {
   protected: boolean;
   /** A player's self-made nation: name, colours, flag and doctrine. AI factions have none. */
   nation: NationProfile | null;
+  /** Id of a flag from the library (a real country's, for AI nations named after one), or null. */
+  flag: string | null;
   /** The doctrine's bonuses (all zero without one). */
   bonus: Bonus;
   /** Cell of the troop rally point, or -1. Land around it is defended harder. */
@@ -55,6 +57,7 @@ export interface FactionSpec {
   type: FactionType;
   elite?: boolean;
   nation?: NationProfile;
+  flag?: string;
 }
 
 interface Rules {

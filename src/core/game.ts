@@ -4,7 +4,7 @@ import { Diplomacy, TRAITOR_DEFENSE_PCT } from './diplomacy';
 import { rulesOf, type Faction, type FactionSpec } from './faction';
 import { bonusOf } from './nation';
 import { mulberry32 } from './rng';
-import { CAPACITY, CONQUER_DELAY, DEFENSE_PCT, Terrain } from './terrain';
+import { CAPACITY, CONQUER_DELAY, DEFENSE_PCT, isLand, Terrain } from './terrain';
 import { stepUnits, type Unit } from './units';
 
 export const TICKS_PER_SECOND = 10;
@@ -43,7 +43,27 @@ export interface Attack {
   buckets: number[][];
   /** Number of cells queued in all buckets. */
   pending: number;
+  /** Set for one tick while a stronger counter-attack pins this one down. */
+  held: boolean;
+  /** Ticks since this attack last took a cell. */
+  idle: number;
 }
+
+/** A real city of the world on this map. A city building on or next to it merges with it. */
+export interface RealCity {
+  cell: number;
+  name: string;
+  /** 1 world metropolis, 2 big city, 3 regional centre. */
+  tier: 1 | 2 | 3;
+}
+/** How far from a real city (in cells, Chebyshev) a building still merges with it. */
+export const CITY_REACH = 2;
+/** A cell falls only if this many of its eight neighbours are the attacker's already: no spikes, no speckles. */
+const COHESION = 2;
+/** An attack that has taken nothing for this long may ignore cohesion, so that it can never get stuck. */
+const COHESION_PATIENCE = 6;
+/** Where attack and counter-attack meet, each side loses this share of the weaker force per tick. */
+const CLASH_DIVISOR = 20;
 
 export type Difficulty = 'easy' | 'normal' | 'hard' | 'impossible';
 
@@ -75,6 +95,8 @@ export interface GameOptions {
   difficulty?: Difficulty;
   /** Per-terrain multiplier on conquest delay and cost, indexed by terrain id. */
   terrainWeights?: ArrayLike<number | undefined>;
+  /** Real cities on the map, as cells. */
+  cities?: RealCity[];
 }
 
 /**
@@ -114,6 +136,10 @@ export class Game {
   dirty = false;
   /** Bounding box of the cells that changed since `takeChanges` was last called. */
   private changed = [Infinity, Infinity, -1, -1];
+  readonly cities: RealCity[];
+  private readonly cityAt = new Map<number, RealCity>();
+  /** Cells that changed hands by conquest in this tick, for the smoothing pass. */
+  private flipped: number[] = [];
 
   constructor(width: number, height: number, terrain: Uint8Array, options: GameOptions) {
     if (terrain.length !== width * height) throw new Error('terrain size does not match grid');
@@ -130,15 +156,27 @@ export class Game {
     this.delay = CONQUER_DELAY.map((d, t) =>
       d === 0 ? 0 : Math.min(MAX_TERRAIN_DELAY, Math.max(1, Math.round(d * (options.terrainWeights?.[t] ?? 1)))),
     );
+    this.cities = options.cities ?? [];
+    for (const c of this.cities) if (!this.cityAt.has(c.cell)) this.cityAt.set(c.cell, c);
     let land = 0;
-    for (let i = 0; i < terrain.length; i++) if (terrain[i] !== Terrain.WATER) land++;
+    for (let i = 0; i < terrain.length; i++) if (isLand(terrain[i])) land++;
     this.landCells = land;
     this.factions.push(this.blankFaction(0, { name: '', type: 'AI_TRIBE' }, 0));
     this.factions[0].alive = false;
   }
 
   isFreeLand(cell: number): boolean {
-    return this.owner[cell] === NEUTRAL && this.terrain[cell] !== Terrain.WATER;
+    return this.owner[cell] === NEUTRAL && isLand(this.terrain[cell]);
+  }
+
+  /** The real city a building on `cell` would merge with: on it or right next to it, and not built on yet. */
+  realCityNear(cell: number): RealCity | null {
+    if (this.cityAt.size === 0) return null;
+    const at = this.nearest(cell, CITY_REACH, (c) => {
+      const city = this.cityAt.get(c);
+      return city !== undefined && !this.buildings.some((b) => b.city === city);
+    });
+    return at < 0 ? null : this.cityAt.get(at)!;
   }
 
   maxTroops(f: Faction): number {
@@ -235,7 +273,7 @@ export class Game {
 
     let atk = this.attacks.find((a) => a.attacker === attackerId && a.target === targetId);
     if (!atk) {
-      atk = { attacker: attackerId, target: targetId, troops: 0, buckets: Array.from({ length: RING }, () => []), pending: 0 };
+      atk = { attacker: attackerId, target: targetId, troops: 0, buckets: Array.from({ length: RING }, () => []), pending: 0, held: false, idle: 0 };
       this.seedFront(atk, att);
       if (atk.pending === 0) return false;
       this.attacks.push(atk);
@@ -253,7 +291,7 @@ export class Game {
   land(attackerId: number, cell: number, troops: number): boolean {
     const att = this.factions[attackerId];
     const target = this.owner[cell];
-    if (!att.alive || this.terrain[cell] === Terrain.WATER) return false;
+    if (!att.alive || !isLand(this.terrain[cell])) return false;
     if (target === attackerId) {
       att.troops += troops; // the shore is ours by now: reinforcements
       return true;
@@ -264,7 +302,7 @@ export class Game {
     this.take(cell, attackerId, target);
     let atk = this.attacks.find((a) => a.attacker === attackerId && a.target === target);
     if (!atk) {
-      atk = { attacker: attackerId, target, troops: 0, buckets: Array.from({ length: RING }, () => []), pending: 0 };
+      atk = { attacker: attackerId, target, troops: 0, buckets: Array.from({ length: RING }, () => []), pending: 0, held: false, idle: 0 };
       this.attacks.push(atk);
     }
     atk.troops += troops - cost;
@@ -332,6 +370,7 @@ export class Game {
       if (f.type !== 'HUMAN_NATION' && (this.tick + f.id * 3) % (2 * TICKS_PER_SECOND) === 0) decide(this, f);
     }
 
+    this.clash();
     let finished = false;
     for (const atk of this.attacks) {
       if (this.advance(atk)) {
@@ -339,6 +378,7 @@ export class Game {
         finished = true;
       }
     }
+    this.smooth();
     if (finished) this.attacks = this.attacks.filter((a) => a.pending >= 0);
     stepUnits(this);
     this.tick++;
@@ -365,6 +405,7 @@ export class Game {
       enemy: 0,
       protected: false,
       nation: spec.nation ?? null,
+      flag: spec.flag ?? null,
       bonus: bonusOf(spec.nation?.doctrine),
       rally: -1,
       alive: true,
@@ -424,7 +465,7 @@ export class Game {
   }
 
   private isTarget(cell: number, target: number): boolean {
-    return this.owner[cell] === target && this.terrain[cell] !== Terrain.WATER;
+    return this.owner[cell] === target && isLand(this.terrain[cell]);
   }
 
   /** Calls `fn` for the 4-neighbours of `cell` that are inside the grid. */
@@ -510,7 +551,59 @@ export class Game {
       def.lastAttacker = attacker;
     }
     this.setOwner(cell, attacker);
+    this.flipped.push(cell);
     this.buryIfGone(target);
+  }
+
+  /**
+   * Tug of war: where two factions attack each other, the two offensives are set against each
+   * other instead of flooding past one another. Both lose troops; only the stronger one moves
+   * in this tick, and with equal forces the front stands still while both bleed.
+   */
+  private clash(): void {
+    for (const a of this.attacks) {
+      if (a.target === NEUTRAL || a.attacker > a.target) continue; // each pair once
+      const b = this.attacks.find((o) => o.attacker === a.target && o.target === a.attacker);
+      if (!b) continue;
+      const weaker = Math.min(a.troops, b.troops);
+      const loss = Math.min(weaker, Math.max(5, Math.ceil(weaker / CLASH_DIVISOR)));
+      a.troops -= loss;
+      b.troops -= loss;
+      a.held = a.troops <= b.troops;
+      b.held = b.troops <= a.troops;
+    }
+  }
+
+  /** Counts the eight neighbours of `cell` that `faction` owns, and those that are land at all. */
+  private around(cell: number, faction: number): [own: number, land: number] {
+    const { owner, terrain, width: w, height: h } = this;
+    const x = cell % w;
+    const y = (cell - x) / w;
+    let own = 0;
+    let land = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if ((dx === 0 && dy === 0) || x + dx < 0 || x + dx >= w || y + dy < 0 || y + dy >= h) continue;
+        const n = cell + dy * w + dx;
+        if (owner[n] === faction) own++;
+        if (isLand(terrain[n])) land++;
+      }
+    }
+    return [own, land];
+  }
+
+  /**
+   * Cohesion: a cell only falls to an attacker who already holds enough of the cells around it.
+   * Narrow land (a bridge, a spit) needs one, and so does the first step out of a lone beachhead.
+   */
+  private backed(cell: number, attacker: number): boolean {
+    const [own, land] = this.around(cell, attacker);
+    if (own >= COHESION || (own >= 1 && land < 4)) return true;
+    let lone = false;
+    this.eachNeighbor(cell, (n) => {
+      if (this.owner[n] === attacker && this.around(n, attacker)[0] === 0) lone = true;
+    });
+    return lone;
   }
 
   /** Conquers this tick's cells of one attack. Returns true when the attack is over. */
@@ -519,19 +612,39 @@ export class Game {
     if (!att.alive) return true; // its troops are lost with it
     const slot = this.tick % RING;
     const bucket = atk.buckets[slot];
+    if (atk.held) {
+      // Pinned down by the counter-attack: this tick's cells wait for the next one.
+      atk.held = false;
+      if (atk.troops <= 0) return true;
+      if (bucket.length > 0) {
+        atk.buckets[slot] = [];
+        const next = atk.buckets[(slot + 1) % RING];
+        for (const cell of bucket) next.push(cell);
+      }
+      return false;
+    }
     let exhausted = false;
+    atk.idle++;
     if (bucket.length > 0) {
       atk.buckets[slot] = [];
       atk.pending -= bucket.length;
+      const strict = atk.idle < COHESION_PATIENCE;
       for (const cell of bucket) {
         // Stale entries: the cell changed hands, or we lost the cells next to it.
         if (!this.isTarget(cell, atk.target) || !this.touches(cell, atk.attacker)) continue;
+        if (strict && !this.backed(cell, atk.attacker)) {
+          // Not yet: it comes up again once its neighbours have fallen.
+          atk.buckets[(slot + 2) % RING].push(cell);
+          atk.pending++;
+          continue;
+        }
         const cost = this.cost(cell, atk.target);
         if (atk.troops < cost) {
           exhausted = true;
           break;
         }
         atk.troops -= cost;
+        atk.idle = 0;
         this.take(cell, atk.attacker, atk.target);
         this.eachNeighbor(cell, (n) => {
           if (this.isTarget(n, atk.target)) this.enqueue(atk, n);
@@ -541,6 +654,59 @@ export class Game {
     if (!exhausted && atk.pending > 0) return false;
     att.troops += atk.troops; // survivors return home
     return true;
+  }
+
+  /**
+   * Tidies the front after a tick of fighting: a pocket of one or two cells that is enclosed by a
+   * single other faction falls to it at once - if the two are fighting, or if the pocket is free land.
+   * This is what keeps front lines in one piece instead of dissolving into a checkerboard.
+   */
+  private smooth(): void {
+    if (this.flipped.length === 0) return;
+    const flipped = this.flipped;
+    this.flipped = [];
+    const { owner, terrain, width: w, height: h } = this;
+    const seen = new Set<number>();
+    for (const c of flipped) {
+      const x = c % w;
+      const y = (c - x) / w;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (x + dx < 0 || x + dx >= w || y + dy < 0 || y + dy >= h) continue;
+          const q = c + dy * w + dx;
+          if (seen.has(q) || !isLand(terrain[q])) continue;
+          seen.add(q);
+          const o = owner[q];
+          // The pocket: this cell, and at most one more of the same owner next to it.
+          let mate = -1;
+          let mates = 0;
+          this.eachNeighbor(q, (n) => {
+            if (owner[n] === o && isLand(terrain[n])) {
+              mates++;
+              mate = n;
+            }
+          });
+          if (mates > 1) continue;
+          let open = false;
+          let around = -1;
+          const look = (cell: number, other: number) =>
+            this.eachNeighbor(cell, (n) => {
+              if (n === other || !isLand(terrain[n])) return;
+              if (owner[n] === o) open = true;
+              else if (around < 0) around = owner[n];
+              else if (around !== owner[n]) open = true;
+            });
+          look(q, mate);
+          if (mate >= 0) look(mate, q);
+          const by: number = around;
+          if (open || by <= NEUTRAL) continue;
+          if (o !== NEUTRAL && !this.attacks.some((a) => (a.attacker === by && a.target === o) || (a.attacker === o && a.target === by))) continue;
+          this.setOwner(q, by);
+          if (mate >= 0) this.setOwner(mate, by);
+          this.buryIfGone(o);
+        }
+      }
+    }
   }
 
   /** Recomputes who borders whom. */
@@ -564,8 +730,8 @@ export class Game {
           factions[b].neighbors.push(a);
         }
       } else if (a) {
-        if (terrain[c2] !== Terrain.WATER) factions[a].bordersNeutral = true;
-      } else if (terrain[c1] !== Terrain.WATER) {
+        if (isLand(terrain[c2])) factions[a].bordersNeutral = true;
+      } else if (isLand(terrain[c1])) {
         factions[b].bordersNeutral = true;
       }
     };

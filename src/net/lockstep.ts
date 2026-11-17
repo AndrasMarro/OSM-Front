@@ -18,7 +18,15 @@ interface Turn {
   cmds: [peer: string, cmd: PlayerCommand][];
   /** The host's state hash before this turn, sent now and then to catch a desync. */
   hash?: number;
+  /** The host changed the game speed: the new factor. */
+  speed?: number;
 }
+
+/** Game speeds the host can choose from: paused, slow, normal, fast, turbo. */
+export const SPEEDS = [0, 0.5, 1, 2, 4] as const;
+const TICK_MS = 100;
+/** Ticks a single turn may carry; after a stall the game catches up no faster than this. */
+const MAX_STEPS = 10;
 
 /** The host adds its state hash to the turn that starts at every such tick. */
 const HASH_EVERY = 50;
@@ -41,6 +49,11 @@ export class Lockstep {
   onResult: (cmd: PlayerCommand, result: CommandResult) => void = () => {};
   /** True once this peer's game no longer matches the host's. */
   desynced = false;
+  /** The speed the game runs at, as the host set it: a factor of real time, 0 while paused. */
+  speed = 1;
+  private pendingSpeed: number | null = null;
+  /** Milliseconds of game time the host still owes the simulation. */
+  private owed = 0;
   private readonly net: Transport | null;
   private readonly hostId: string;
   private queue: [string, PlayerCommand][] = [];
@@ -76,13 +89,37 @@ export class Lockstep {
     else void this.net!.send('cmd', cmd, this.hostId);
   }
 
+  /** Host only: sets the game speed for everybody. It travels with the next turn; clients cannot change it. */
+  setSpeed(speed: number): boolean {
+    if (!this.host || !(SPEEDS as readonly number[]).includes(speed)) return false;
+    this.pendingSpeed = speed;
+    return true;
+  }
+
+  /**
+   * Host: how many ticks are due after `elapsedMs` of real time at the current speed.
+   * None while paused; the remainder carries over to the next call.
+   */
+  due(elapsedMs: number): number {
+    if (this.speed === 0) {
+      this.owed = 0;
+      return 0;
+    }
+    this.owed = Math.min(this.owed + elapsedMs * this.speed, MAX_STEPS * TICK_MS);
+    const ticks = Math.floor(this.owed / TICK_MS);
+    this.owed -= ticks * TICK_MS;
+    return ticks;
+  }
+
   /**
    * Host: closes a turn - all commands received so far, then `steps` ticks - and sends it to everyone.
    * Returns false if there was nothing to do.
    */
   turn(steps: number): boolean {
-    if (!this.host || (steps === 0 && this.queue.length === 0)) return false;
+    if (!this.host || (steps === 0 && this.queue.length === 0 && this.pendingSpeed === null)) return false;
     const turn: Turn = { n: this.next, steps, cmds: this.queue };
+    if (this.pendingSpeed !== null) turn.speed = this.pendingSpeed;
+    this.pendingSpeed = null;
     if (steps > 0 && this.game.tick % HASH_EVERY === 0) turn.hash = this.game.hash();
     this.queue = [];
     void this.net?.send('turn', turn);
@@ -100,12 +137,13 @@ export class Lockstep {
   }
 
   private apply(turn: Turn): void {
-    const valid = turn && turn.n === this.next && Number.isInteger(turn.steps) && turn.steps >= 0 && turn.steps <= 10 && Array.isArray(turn.cmds);
+    const valid = turn && turn.n === this.next && Number.isInteger(turn.steps) && turn.steps >= 0 && turn.steps <= MAX_STEPS && Array.isArray(turn.cmds);
     if (!valid || (turn.hash !== undefined && turn.hash !== this.game.hash())) {
       this.desynced = true;
       return;
     }
     this.next++;
+    if (turn.speed !== undefined && (SPEEDS as readonly number[]).includes(turn.speed)) this.speed = turn.speed;
     for (const entry of turn.cmds) {
       if (!Array.isArray(entry)) continue;
       const [peer, cmd] = entry;

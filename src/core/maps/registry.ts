@@ -23,6 +23,8 @@ export function validateMapPack(p: MapPackDefinition): string[] {
   if (!Array.isArray(p.spawns) || p.spawns.length > 500) errors.push('spawns must be an array of at most 500 points');
   else if (!p.spawns.every((s) => typeof s?.name === 'string' && s.name.length <= 60 && Array.isArray(s.lngLat) && s.lngLat.slice(0, 2).every(Number.isFinite) && ['nation', 'tribe', 'eliteTribe'].includes(s.kind)))
     errors.push('every spawn needs a name, lngLat and a kind (nation, tribe, eliteTribe)');
+  if (p.countries !== undefined && !(Array.isArray(p.countries) && p.countries.length <= 300 && p.countries.every((c) => typeof c === 'string' && c.length <= 40)))
+    errors.push('countries must be an array of at most 300 short strings');
   if (!(Number.isInteger(p.randomTribes) && p.randomTribes >= 0 && p.randomTribes <= 500)) errors.push('randomTribes must be an integer from 0 to 500');
   if (p.terrainWeights !== undefined && (typeof p.terrainWeights !== 'object' || p.terrainWeights === null || !Object.values(p.terrainWeights).every((w) => Number.isFinite(w) && (w as number) > 0)))
     errors.push('terrainWeights must map terrain names to positive numbers');

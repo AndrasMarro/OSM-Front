@@ -1,6 +1,6 @@
 import { TRADE_INCOME } from './diplomacy';
 import { rulesOf } from './faction';
-import type { Game } from './game';
+import type { Game, RealCity } from './game';
 import { Registry } from './registry';
 import { Terrain } from './terrain';
 import type { InterceptSpec } from './units';
@@ -26,6 +26,8 @@ export interface BuildingDefinition {
   growthPct?: number;
   /** Gold per tick, and the bonus in percent while a road or rail links it to a friendly city (Factory). */
   income?: number;
+  /** Merges with a real city it is built on or next to, taking its name and a bonus by the city's size. */
+  settles?: boolean;
   linkBonusPct?: number;
   /** Cells within `radius` cost attackers `defensePct` more and fall `slow` ticks later (Bunker). */
   fort?: { radius: number; defensePct: number; slow: number };
@@ -46,6 +48,8 @@ export interface Building {
   interceptors: number;
   /** Tick from which the air defence can fire again. */
   readyAt: number;
+  /** The real city this building has merged with, if any. */
+  city: RealCity | null;
 }
 
 export type OrderResult = 'ok' | 'gold' | 'place' | 'spacing' | 'coast' | 'base' | 'range' | 'target' | 'troops';
@@ -53,7 +57,7 @@ export type OrderResult = 'ok' | 'gold' | 'place' | 'spacing' | 'coast' | 'base'
 export type BuildingRegistry = Registry<BuildingDefinition>;
 export const buildingRegistry: BuildingRegistry = new Registry<BuildingDefinition>();
 
-buildingRegistry.register({ id: 'City', name: 'Stadt', icon: '⌂', cost: 250, hp: 4, capacity: 2500, growthPct: 15 });
+buildingRegistry.register({ id: 'City', name: 'Stadt', icon: '⌂', cost: 250, hp: 4, capacity: 2500, growthPct: 15, settles: true });
 buildingRegistry.register({ id: 'Factory', name: 'Fabrik', icon: '⚙', cost: 200, hp: 3, income: 0.4, linkBonusPct: 50 });
 buildingRegistry.register({ id: 'Bunker', name: 'Bunker', icon: '♜', cost: 150, hp: 5, fort: { radius: 6, defensePct: 200, slow: 4 } });
 buildingRegistry.register({ id: 'Port', name: 'Hafen', icon: '⚓', cost: 200, hp: 3, coastal: true });
@@ -68,6 +72,14 @@ buildingRegistry.register({
   intercept: { radius: 14, cooldown: 80, chancePct: 100, domains: ['air', 'missile'] },
 });
 
+/** What merging with a real city is worth, by tier: extra population growth and tax income in percent. */
+export const CITY_TIERS: Record<1 | 2 | 3, { label: string; growthPct: number; incomePct: number }> = {
+  1: { label: 'Metropole', growthPct: 50, incomePct: 30 },
+  2: { label: 'Großstadt', growthPct: 30, incomePct: 15 },
+  3: { label: 'Regionalstadt', growthPct: 15, incomePct: 0 },
+};
+/** Buildings add up to at most this much extra growth. */
+const MAX_GROWTH_PCT = 150;
 /** Minimum distance between two buildings, in cells (Chebyshev). */
 const SPACING = 2;
 /** A fort may hold a front up by at most this many ticks; the attack scheduler has no room for more. */
@@ -104,7 +116,7 @@ export function build(g: Game, factionId: number, defId: string, cell: number): 
   if (check !== 'ok') return check;
   const def = buildingRegistry.get(defId)!;
   g.factions[factionId].gold -= price(g, factionId, def);
-  const b: Building = { id: g.nextId++, def, owner: factionId, cell, hp: def.hp, linked: false, intercept: def.intercept, interceptors: def.intercept ? 1 : 0, readyAt: 0 };
+  const b: Building = { id: g.nextId++, def, owner: factionId, cell, hp: def.hp, linked: false, intercept: def.intercept, interceptors: def.intercept ? 1 : 0, readyAt: 0, city: def.settles ? g.realCityNear(cell) : null };
   g.buildings.push(b);
   g.buildingAt.set(cell, b);
   g.dirty = true;
@@ -176,7 +188,8 @@ export function refreshEconomy(g: Game): void {
     const f = g.factions[b.owner];
     const d = b.def;
     f.cityCapacity += d.capacity ?? 0;
-    f.growthPct = Math.min(100, f.growthPct + (d.growthPct ?? 0));
+    f.growthPct = Math.min(MAX_GROWTH_PCT, f.growthPct + (d.growthPct ?? 0) + (b.city ? CITY_TIERS[b.city.tier].growthPct : 0));
+    if (b.city) f.income += ((rulesOf(f).income + f.cells * rulesOf(f).cellIncome) * CITY_TIERS[b.city.tier].incomePct) / 100;
     if (d.income) {
       if (relink) b.linked = linkedCity(g, b.owner, b.cell) >= 0;
       f.income += (d.income * (100 + (b.linked ? (d.linkBonusPct ?? 0) : 0)) * (100 + f.bonus.factoryIncomePct)) / 10000;

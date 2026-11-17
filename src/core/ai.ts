@@ -1,7 +1,7 @@
 import { build, buildingRegistry, price, type OrderResult } from './buildings';
 import { rulesOf, type Faction } from './faction';
 import { NEUTRAL, type Game } from './game';
-import { Terrain } from './terrain';
+import { isLand } from './terrain';
 import { launch, seaRoute, unitRegistry } from './units';
 
 /**
@@ -205,7 +205,7 @@ function operate(g: Game, f: Faction): void {
   seaRoute(g, port.cell, transport.range, (water) => {
     g.eachNeighbor(water, (n) => {
       const o = g.owner[n];
-      if (shore < 0 && g.terrain[n] !== Terrain.WATER && o !== f.id && (o === NEUTRAL ? !f.bordersNeutral : o === enemy?.id)) shore = n;
+      if (shore < 0 && isLand(g.terrain[n]) && o !== f.id && (o === NEUTRAL ? !f.bordersNeutral : o === enemy?.id)) shore = n;
     });
     return shore >= 0;
   });

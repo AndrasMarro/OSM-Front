@@ -42,6 +42,8 @@ export interface Flag {
   colors: [string, string, string];
   emblem: (typeof EMBLEMS)[number];
   emblemColor: string;
+  /** Id of a flag from the library (`nation-presets.ts`). It is shown instead of the self-made design. */
+  preset?: string;
 }
 
 /** How a player presents their nation. Made in the editor, stored in the browser, sent to every peer. */
@@ -64,6 +66,8 @@ export const DEFAULT_NATION: NationProfile = {
   doctrine: 'industry',
 };
 
+/** Shape of a library flag id: an ISO code or `h-` plus a name. An id nobody knows shows the self-made design. */
+const FLAG_ID = /^([a-z]{2}|h-[a-z-]{2,24})$/;
 const MAX_NAME = 20;
 const text = (v: unknown, fallback: string) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, MAX_NAME).trim() : '') || fallback;
 const color = (v: unknown, fallback: string) => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : fallback);
@@ -88,6 +92,7 @@ export function sanitizeNation(input: unknown): NationProfile {
       colors: [color(colors[0], d.flag.colors[0]), color(colors[1], d.flag.colors[1]), color(colors[2], d.flag.colors[2])],
       emblem: oneOf(f.emblem, EMBLEMS, d.flag.emblem),
       emblemColor: color(f.emblemColor, d.flag.emblemColor),
+      ...(typeof f.preset === 'string' && FLAG_ID.test(f.preset) ? { preset: f.preset } : {}),
     },
     doctrine: doctrineRegistry.get(typeof n.doctrine === 'string' ? n.doctrine : '') ? (n.doctrine as string) : d.doctrine,
   };

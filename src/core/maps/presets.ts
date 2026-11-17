@@ -372,3 +372,25 @@ export const PRESETS: MapPackDefinition[] = [
     { terrain: { type: 'osm', mountainElevation: 2800 }, terrainWeights: { ICE: 1.4, MOUNTAIN: 1.5 } },
   ),
 ];
+
+/**
+ * The countries each country or region map is about, as ISO 3166 numeric codes. Land of any other
+ * country is out of bounds there. World, Asia, the Americas and Antarctica are played box to box.
+ */
+// prettier-ignore
+const COUNTRIES: Record<string, string[]> = {
+  Europe: ['008', '020', '040', '112', '056', '070', '100', '191', '196', '203', '208', '233', '246', '250', '276', '300', '348', '352', '372', '380', '428', '438', '440', '442', '470',
+    '498', '492', '499', '528', '807', '578', '616', '620', '642', '643', '674', '688', '703', '705', '724', '752', '756', '804', '826', '336', '792', '234', '833', '831', '832', '248', 'Kosovo', 'N. Cyprus'],
+  // Slovenia to Moldova and Greece, with Hungary and Turkey.
+  Balkans: ['705', '191', '070', '688', '499', 'Kosovo', '008', '807', '300', '100', '642', '498', '348', '792'],
+  USA: ['840'],
+  China: ['156', '344', '446'],
+  Russia: ['643'],
+  // Australia, New Zealand, Papua New Guinea, Solomon Islands, Vanuatu, New Caledonia, Fiji.
+  Australia: ['036', '554', '598', '090', '548', '540', '242'],
+  // Canada, USA, Mexico, Greenland, Central America and the Caribbean.
+  NorthAmerica: ['124', '840', '484', '304', '320', '084', '222', '340', '558', '188', '591', '192', '388', '332', '214', '044', '630'],
+  // France is in for French Guiana.
+  SouthAmerica: ['170', '862', '328', '740', '250', '218', '604', '076', '068', '600', '152', '032', '858', '238', '780'],
+};
+for (const pack of PRESETS) if (COUNTRIES[pack.id]) pack.countries = COUNTRIES[pack.id];

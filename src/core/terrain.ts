@@ -8,14 +8,19 @@ export const Terrain = {
   HIGHWAY: 5,
   RAIL: 6,
   ICE: 7,
+  /** Land beyond the borders of the countries a map is about: nobody can own, cross or target it. */
+  OUT_OF_BOUNDS: 8,
 } as const;
 export type TerrainName = keyof typeof Terrain;
 
 // The tables below are indexed by terrain id.
 
 /** Ticks a front needs to flood into a cell. Also drives the base troop cost. */
-export const CONQUER_DELAY = [0, 2, 3, 4, 6, 1, 1, 5];
+export const CONQUER_DELAY = [0, 2, 3, 4, 6, 1, 1, 5, 0];
 /** Defender strength in percent. */
-export const DEFENSE_PCT = [0, 100, 120, 160, 200, 90, 90, 140];
+export const DEFENSE_PCT = [0, 100, 120, 160, 200, 90, 90, 140, 0];
 /** Troops a cell can sustain. Growth is logistic, so more capacity also means faster growth. */
-export const CAPACITY = [0, 30, 90, 20, 10, 30, 30, 5];
+export const CAPACITY = [0, 30, 90, 20, 10, 30, 30, 5, 0];
+
+/** Land that can be owned: everything but water and the land outside the map's borders. */
+export const isLand = (terrain: number) => terrain !== Terrain.WATER && terrain !== Terrain.OUT_OF_BOUNDS;

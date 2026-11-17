@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { buildingRegistry, price } from '../core/buildings';
 import type { CommandResult } from '../core/commands';
 import { Game, NEUTRAL } from '../core/game';
-import { sanitizeNation, type NationProfile } from '../core/nation';
+import { DEFAULT_NATION, sanitizeNation, type NationProfile } from '../core/nation';
 import { Terrain } from '../core/terrain';
-import { Lockstep, type PlayerCommand } from './lockstep';
+import { Lockstep, SPEEDS, type PlayerCommand } from './lockstep';
 import type { Handler, Transport } from './transport';
 
 /** An in-memory network: messages are cloned like on a wire and delivered at once. */
@@ -218,5 +218,65 @@ describe('lockstep', () => {
     expect(results).toEqual(['ok', 'ok']);
     expect(solo.game.tick).toBe(100);
     expect(solo.me!.cells).toBeGreaterThan(150);
+  });
+});
+
+describe('game speed', () => {
+  const solo = () => new Lockstep(new Game(20, 20, new Uint8Array(400).fill(1), { seed: 1 }));
+  /** Ticks the host's clock hands out over `seconds` of real time, asked every 50 ms like the page does. */
+  const ticksIn = (ls: Lockstep, seconds: number) => {
+    let ticks = 0;
+    for (let ms = 0; ms < seconds * 1000; ms += 50) {
+      const steps = ls.due(50);
+      ls.turn(steps);
+      ticks += steps;
+    }
+    return ticks;
+  };
+
+  it('offers pause, half, normal, double and fourfold speed', () => {
+    expect([...SPEEDS]).toEqual([0, 0.5, 1, 2, 4]);
+  });
+
+  it.each([
+    [0, 0],
+    [0.5, 50],
+    [1, 100],
+    [2, 200],
+    [4, 400],
+  ])('runs the simulation at %fx: %i ticks in ten seconds', (speed, expected) => {
+    const ls = solo();
+    expect(ls.setSpeed(speed)).toBe(true);
+    ls.turn(0); // the change travels with a turn
+    expect(ls.speed).toBe(speed);
+    expect(ticksIn(ls, 10)).toBe(expected);
+    expect(ls.game.tick).toBe(expected);
+  });
+
+  it('starts at normal speed and refuses speeds that are not on the list', () => {
+    const ls = solo();
+    expect(ls.speed).toBe(1);
+    expect(ls.setSpeed(3)).toBe(false);
+    expect(ls.setSpeed(-1)).toBe(false);
+    ls.turn(0);
+    expect(ls.speed).toBe(1);
+  });
+
+  it('still takes orders while paused, and resumes without a jump', () => {
+    const ls = solo();
+    ls.setSpeed(0);
+    ls.turn(0);
+    ls.issue({ type: 'spawn', cell: 210, nation: DEFAULT_NATION });
+    expect(ls.turn(ls.due(5000))).toBe(true);
+    expect(ls.me).not.toBeNull();
+    expect(ls.game.tick).toBe(0);
+    ls.setSpeed(1);
+    ls.turn(0);
+    expect(ls.due(100)).toBe(1); // the five paused seconds are not owed
+  });
+
+  it('catches up after a stall by no more than one full turn', () => {
+    const ls = solo();
+    expect(ls.due(60_000)).toBe(10);
   });
 });

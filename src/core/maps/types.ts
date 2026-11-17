@@ -34,6 +34,11 @@ export interface MapPackDefinition {
   terrainWeights?: Partial<Record<TerrainName, number>>;
   /** Historic/regional starting points of AI nations and named tribes. */
   spawns: SpawnPoint[];
+  /**
+   * The countries the map is about, as ISO 3166 numeric codes (or Natural Earth names where a
+   * territory has no code). Land of any other country is out of bounds. Omit to play the whole box.
+   */
+  countries?: string[];
   /** Extra tribes the seeded PRNG scatters over the remaining land. */
   randomTribes: number;
 }

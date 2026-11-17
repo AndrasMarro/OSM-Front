@@ -1,7 +1,7 @@
 import { damage, type Building, type OrderResult } from './buildings';
 import { NEUTRAL, type Game } from './game';
 import { Registry } from './registry';
-import { Terrain } from './terrain';
+import { isLand, Terrain } from './terrain';
 
 export type Domain = 'sea' | 'air' | 'missile';
 
@@ -205,7 +205,7 @@ export function launch(g: Game, factionId: number, unitId: string, target: numbe
       };
     } else if (def.carriesTroops) {
       // Troops need a foreign or free shore: the clicked cell, or the nearest one - of the same owner, if there is one.
-      const shore = (c: number) => g.terrain[c] !== Terrain.WATER && g.owner[c] !== factionId && g.touchesWater(c);
+      const shore = (c: number) => isLand(g.terrain[c]) && g.owner[c] !== factionId && g.touchesWater(c);
       to = water ? -1 : g.nearest(target, 6, (c) => g.owner[c] === g.owner[target] && shore(c));
       if (to < 0) to = g.nearest(target, 6, shore);
       if (to < 0) return 'target';
@@ -325,7 +325,7 @@ function fire(g: Game, u: Unit, onStation: boolean): void {
     return;
   }
   if (!onStation) return;
-  const shore = g.nearest(Math.floor(u.y) * g.width + Math.floor(u.x), guns.radius, (c) => g.terrain[c] !== Terrain.WATER && atWar(g.owner[c]));
+  const shore = g.nearest(Math.floor(u.y) * g.width + Math.floor(u.x), guns.radius, (c) => isLand(g.terrain[c]) && atWar(g.owner[c]));
   if (shore < 0) return;
   const victim = g.factions[g.owner[shore]];
   victim.troops -= Math.min(victim.troops, guns.troops);
@@ -375,7 +375,7 @@ function blast(g: Game, u: Unit): void {
   for (let y = Math.max(0, cy - r); y <= Math.min(h - 1, cy + r); y++) {
     for (let x = Math.max(0, cx - r); x <= Math.min(w - 1, cx + r); x++) {
       const cell = y * w + x;
-      if ((x - cx) * (x - cx) + (y - cy) * (y - cy) > r * r || g.terrain[cell] === Terrain.WATER) continue;
+      if ((x - cx) * (x - cx) + (y - cy) * (y - cy) > r * r || !isLand(g.terrain[cell])) continue;
       area++;
       const owner = g.owner[cell];
       if (owner) hits.set(owner, (hits.get(owner) ?? 0) + 1);

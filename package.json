@@ -11,11 +11,15 @@
   },
   "dependencies": {
     "@mapbox/vector-tile": "^3.0.0",
+    "flag-icons": "^7.6.0",
     "maplibre-gl": "^6.17.0",
     "pbf": "^5.1.2",
-    "trystero": "^0.26.0"
+    "topojson-client": "^3.1.0",
+    "trystero": "^0.26.0",
+    "world-atlas": "^2.0.2"
   },
   "devDependencies": {
+    "@types/topojson-client": "^3.1.5",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
     "vitest": "^5.1.0"

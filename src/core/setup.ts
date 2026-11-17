@@ -1,7 +1,9 @@
-import { Game, type Difficulty } from './game';
+import { Game, type Difficulty, type RealCity } from './game';
 import { GridProjection } from './maps/projection';
+import { REAL_CITIES } from './maps/cities';
 import type { MapPackDefinition } from './maps/types';
-import { Terrain, type TerrainName } from './terrain';
+import { flagFor } from './nation-presets';
+import { isLand, Terrain, type TerrainName } from './terrain';
 
 /** Share of all tribes that are elite tribes (the brief asks for 15-20 %). */
 const ELITE_SHARE = 0.17;
@@ -26,15 +28,22 @@ function tribeName(rng: () => number): string {
 export function createGame(pack: MapPackDefinition, proj: GridProjection, terrain: Uint8Array, seed: number, difficulty: Difficulty = 'normal'): Game {
   const weights: number[] = [];
   for (const [name, w] of Object.entries(pack.terrainWeights ?? {})) weights[Terrain[name as TerrainName]] = w;
-  const game = new Game(proj.width, proj.height, terrain, { seed, terrainWeights: weights, difficulty });
+  // Real cities on playable land; where two share a cell, the bigger one (first in the catalogue) stays.
+  const cities: RealCity[] = [];
+  for (const [name, lng, lat, , tier] of REAL_CITIES) {
+    const cell = proj.cellAt(lng, lat);
+    if (cell >= 0 && isLand(terrain[cell]) && !cities.some((c) => c.cell === cell)) cities.push({ cell, name, tier });
+  }
+  const game = new Game(proj.width, proj.height, terrain, { seed, terrainWeights: weights, difficulty, cities });
   const { rng } = game;
 
   let elites = 0;
   for (const s of pack.spawns) {
     const cell = proj.cellAt(s.lngLat[0], s.lngLat[1]);
-    if (cell < 0) continue;
+    // A capital beyond the map's borders founds nothing.
+    if (cell < 0 || terrain[cell] === Terrain.OUT_OF_BOUNDS) continue;
     const elite = s.kind === 'eliteTribe';
-    if (game.addFaction({ name: s.name, type: s.kind === 'nation' ? 'AI_NATION' : 'AI_TRIBE', elite }, cell) && elite) elites++;
+    if (game.addFaction({ name: s.name, type: s.kind === 'nation' ? 'AI_NATION' : 'AI_TRIBE', elite, flag: s.kind === 'nation' ? flagFor(s.name) : undefined }, cell) && elite) elites++;
   }
 
   // Top the named elite tribes up to the target share with random ones.
