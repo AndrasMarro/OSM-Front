@@ -16,6 +16,9 @@ direkt von Browser zu Browser, ohne Server.
 - **Sieben Gebäude, acht Einheiten:** Stadt, Fabrik, Bunker, Hafen, Fliegerhorst, Raketensilo, SAM-Stellung;
   Transporter, Kriegs- und Handelsschiffe, Jäger, Bomber, Fallschirmjäger, Raketen, Atomraketen.
 - **Diplomatie:** Nichtangriffspakt, Bündnis, Handel, Hilfslieferungen, Embargo – auch mit Stämmen.
+- **Echte Grenzen und Städte:** Länderkarten enden an den echten Staatsgrenzen; eine Stadt auf einer echten
+  Metropole übernimmt deren Namen und Bonus.
+- **Flaggen-Bibliothek:** über hundert heutige Staaten und historische Reiche als Vorlage für die eigene Nation.
 - **Tutorial:** ein geführtes erstes Spiel in sechs Schritten, direkt vom Startbildschirm.
 - **Mehrspieler:** „Raum erstellen“, Link verschicken, losspielen. Peer-to-Peer über WebRTC.
 
@@ -25,7 +28,9 @@ direkt von Browser zu Browser, ohne Server.
 | --- | --- |
 | Linksklick | Startgebiet wählen; danach Sofort-Angriff auf angrenzendes freies Land oder eine Nachbarfraktion |
 | Rechtsklick | Radialmenü am Mauszeiger: bauen, Schiffe, Luftwaffe, Raketen, Diplomatie |
-| Regler unten, `Q`/`E`, `A`/`D`, Umschalt + Mausrad | Truppenanteil für Angriffe |
+| Regler unten, `Q`/`E`, Umschalt + Mausrad | Truppenanteil für Angriffe |
+| `W` `A` `S` `D`, Pfeiltasten | Kamera verschieben |
+| Leertaste, `+`/`-` | Pause, Spieltempo 0.5x bis 4x (im Mehrspieler der Host) |
 | Ziehen (links oder Mitteltaste) | Karte verschieben |
 | `1`–`7` | Gebäude wählen – die Vorschau zeigt Reichweite und ob der Platz taugt; Linksklick baut |
 | `8`, `9` | Bomber und Rakete zielen; Linksklick feuert |
@@ -62,4 +67,6 @@ veröffentlicht.
 - Kartendaten © [OpenStreetMap](https://www.openstreetmap.org/copyright)-Mitwirkende (ODbL),
   Kacheln und Basiskarte von [OpenFreeMap](https://openfreemap.org/) im OpenMapTiles-Schema.
 - Höhendaten: Terrarium-Kacheln (Mapzen / AWS Open Data).
+- Ländergrenzen: [Natural Earth](https://www.naturalearthdata.com/) über `world-atlas`; Städte: [GeoNames](https://www.geonames.org/) (CC BY 4.0);
+  Flaggen: [flag-icons](https://github.com/lipis/flag-icons) (MIT).
 - [MapLibre GL JS](https://maplibre.org/), [Trystero](https://github.com/dmotz/trystero).

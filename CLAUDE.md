@@ -34,6 +34,7 @@ Deterministischer Lockstep / Host-Tick.
 | `MOUNTAIN` / `FOREST` | Langsame Eroberung, hoher Verteidigungsbonus |
 | `HIGHWAY` / `RAIL` | Schnellerer Nachschub und Einheiten-Speed |
 | `ICE` | Gletscher und Eisschilde: langsame Eroberung, kaum Bevölkerung (für `Antarctica` ergänzt) |
+| `OUT_OF_BOUNDS` | Land außerhalb der Länder einer Karte: niemandem zugänglich, dunkel ausgegraut (`isLand()` prüft beides) |
 
 **Terrain-Quellen** (`src/osm/terrain.ts`, außerhalb von `src/core/`, weil es Netzwerk und Canvas braucht):
 
@@ -42,6 +43,10 @@ Deterministischer Lockstep / Host-Tick.
   Siedlungen und Autobahnen ab Zoom 4, Wald ab 7, Schienen ab 8.
 - Gebirge aus Terrarium-Höhenkacheln (OSM enthält keine Höhendaten), Schwelle pro Karte einstellbar.
 - Straßen und Schienen werden zuletzt gezeichnet und überbrücken damit Flüsse und Meerengen.
+- **Echte Ländergrenzen** (`src/osm/countries.ts`): Natural Earth 1:50m aus dem Paket `world-atlas`. Nennt ein Pack
+  `countries` (ISO-3166-Nummern, für Kosovo der Natural-Earth-Name), wird alles Land anderer Staaten zu
+  `OUT_OF_BOUNDS`. Dieselben Daten zeichnen als MapLibre-Linien alle Grenzen fein und die Außengrenze der Karte
+  leuchtend – hell im Startmenü, gedämpft im Spiel.
 - **Synthese unterhalb dieser Zooms** (`src/core/maps/synth.ts`, deterministisch, ohne Zufall): Wald aus einem
   Biom-Modell (Breitengrad-Dichte × Value-Noise, Vorberge dichter bewaldet) und Schienen als Achsen zwischen den
   Hauptstädten der Karte und den größten OSM-Städten (Dijkstra über das Grid; Wasser nur für kurze Brücken,
@@ -63,6 +68,14 @@ Eine erweiterbare `MapRegistry` stellt die im Startmenü/Lobby wählbaren Karten
 (USA/Kanada/Mexiko), `SouthAmerica`, `Balkans`, `USA`, `China`, `Russia`, `Australia` (inkl. Ozeanien),
 `Antarctica` (spezielles Eis-/Gebirgs-Terrain).
 
+**Länder-Maskierung:** `Europe`, `Balkans`, `USA`, `China`, `Russia`, `Australia`, `NorthAmerica` und
+`SouthAmerica` tragen ihre Staaten in `countries` (`COUNTRIES` am Ende von `presets.ts`); `World`, `Asia`,
+`Americas` und `Antarctica` bleiben ganze Rechtecke.
+
+**Weltstädte (`src/core/maps/cities.ts`):** 837 echte Städte aus GeoNames (CC BY 4.0) mit deutschen Namen, wo
+gebräuchlich, und einer Stufe: 1 Weltmetropole, 2 Großstadt, 3 Regionalstadt. `createGame` legt die Städte jeder
+Karte als Zellen in `Game.cities` ab.
+
 **Custom Maps:** Das Kartenformat ist ein standardisiertes JSON-/Binär-Schema (`MapPackDefinition`). Eigene
 Regionen (per OSM-Bounding-Box-Generator) oder von Spielern gezeichnete/importierte Karten (PNG-Heightmap bzw.
 Terrain-Maske + JSON-Metadaten) müssen sich **ohne Code-Änderung** laden lassen.
@@ -81,7 +94,13 @@ Jede Entität auf der Karte implementiert das Interface `Faction`.
 `NationProfile` – Nations- und Herrschername, Gebiets- und Grenzfarbe, Flagge (Vorlage, drei Farben, Emblem) und
 Doktrin. Es liegt im `localStorage`, geht per `hello` an die Lobby und mit dem `spawn`-Kommando ins Spiel;
 `sanitizeNation()` bereinigt es auf jedem Peer gleich. Doktrinen sind Daten in `doctrineRegistry`, die Engine
-liest nur ihre Zahlen:
+liest nur ihre Zahlen. Die Vorlagen-Bibliothek (`src/core/nation-presets.ts`) bietet 101 heutige Staaten und
+14 historische Reiche (u. a. Österreich-Ungarn, Römisches Reich, Byzanz, Preußen, Osmanisches Reich, UdSSR,
+HRR); eine Wahl setzt Name, Farben, Flagge (`flag.preset`) und Doktrin, alles bleibt danach änderbar. Die Bilder
+liegen in `src/render/flag-library.ts`: heutige Flaggen aus `flag-icons`, historische als eigene SVGs. KI-Nationen,
+die nach einem echten Staat heißen, tragen dessen Flagge (`Faction.flag`).
+
+
 
 | Doktrin | Bonus |
 | --- | --- |
@@ -153,6 +172,7 @@ liest optionale Felder der Definition – ein neuer Typ ist ein `register({...})
 | `blast` | Gebäudeschaden, Truppenverlust, optional Neutralisierung + 60 s Verstrahlung | `Bomber`, `Missile`, `Nuke` (Radius 12) |
 | `guns` | Patrouille: beschießt feindliche Schiffe und Küsten | `Warship` |
 | `trade` | pendelt zum nächsten fremden Hafen, Gold an beide Enden | `TradeShip` |
+| `settles` | verschmilzt mit einer echten Stadt auf oder neben dem Bauplatz (2 Zellen): Name und Bonus nach Stufe – 1: +50 % Wachstum, +30 % Gold; 2: +30 %, +15 %; 3: +15 % (`CITY_TIERS`) | `City` |
 
 Gebäudepreise steigen je weiterem Gebäude desselben Typs um die Hälfte des Grundpreises. Eroberte Zellen
 übergeben ihr Gebäude dem Eroberer. Gold: Nationen 0,5/Tick + 0,0015 je Zelle (Tribes deutlich weniger).
@@ -170,6 +190,13 @@ angespartes Vermögen nicht als eine Salve ankommt und SAM-Stellungen nachladen 
   Bunkern die Eroberung der Grenzzellen (Flood-Fill/BFS-Queue entlang der Grenze).
 - **Spezial-Operationen** als zielbare Karten-Aktionen: Marine-Invasionen (über Wasserzellen),
   Luftschläge/Fallschirmjäger (über `Airfield`), Raketenschläge (über `MissileSilo`).
+- **Front-Glättung (`src/core/game.ts`):**
+  - *Tug-of-War:* Greifen sich zwei Fraktionen gegenseitig an, verrechnet `clash()` beide Offensiven: jede verliert
+    pro Tick ein Zwanzigstel der schwächeren (mindestens 5), nur die stärkere rückt vor, bei Gleichstand steht die Front.
+  - *Kohäsion:* Eine Zelle fällt nur, wenn mindestens 2 ihrer 8 Nachbarn schon dem Angreifer gehören. Ausnahmen:
+    schmales Land (Brücken), der erste Schritt aus einem Brückenkopf und Angriffe, die 6 Ticks lang nichts nahmen.
+  - *Enklaven:* `smooth()` gibt nach jedem Kampf-Tick 1–2-Zellen-Taschen, die ganz von einer kämpfenden Fraktion
+    (oder als freies Land von einer Fraktion) umschlossen sind, an den Umschließenden.
 - **Truppen-Sammelpunkt:** ein Punkt auf eigenem Gebiet (Kommando `rally`); im Umkreis von 8 Zellen kostet
   eigenes Land den Angreifer 50 % mehr, solange der Punkt selbst gehalten wird.
 
@@ -182,14 +209,21 @@ angespartes Vermögen nicht als eine Salve ankommt und SAM-Stellungen nachladen 
 - **Rechtsklick** öffnet am Mauszeiger das Radialmenü (`radial.ts`): auf eigenem Gebiet Bau-Rad, Sammelpunkt und
   stationierte Einheiten; auf fremdem Gebiet Bodenangriff, Schiffe, Luftwaffe, Raketen und das Diplomatie-Untermenü;
   auf Wasser Kriegsschiff und See-Invasion. Im Bau-/Zielmodus bricht er stattdessen den Modus ab.
-- **Truppenanteil:** Regler unten über der Hotkey-Leiste; `Q`/`A` −10 %, `E`/`D` +10 %, Mausrad über dem Regler
-  oder Umschalt + Mausrad ±5 %. Ohne Umschalt zoomt das Mausrad die Karte.
-- **Kamera:** Links-Ziehen oder Mitteltaste-Ziehen verschiebt die Karte; erst unter 5 px Bewegung gilt ein Klick.
+- **Truppenanteil:** Regler unten über der Hotkey-Leiste; `Q` −10 %, `E` +10 %, Mausrad über dem Regler oder
+  Umschalt + Mausrad ±5 %. Ohne Umschalt zoomt das Mausrad die Karte.
+- **Kamera:** `W`/`A`/`S`/`D` und Pfeiltasten verschieben gleichmäßig (700 px/s, auf jeder Zoomstufe gleich schnell),
+  ebenso Links- oder Mitteltaste-Ziehen; erst unter 5 px Bewegung gilt ein Klick. Doppelklick-Zoom ist aus.
+- **Spieltempo:** Leiste oben mittig – `⏸`, 0.5x, 1x, 2x, 4x; Leertaste pausiert, `+`/`.` und `-`/`,` wechseln die
+  Stufe. Pausiert bleiben Karte, Bau-Planung, Diplomatie und Befehle bedienbar. Im Mehrspieler stellt nur der Host
+  das Tempo (`Lockstep.setSpeed`); die neue Stufe reist mit dem nächsten Turn zu allen.
+- **Rangliste:** oben rechts, einklappbar: Rang, Flagge, Name, Landanteil mit Balken (relativ zum Ersten), Truppen,
+  Gold; die eigene Zeile hervorgehoben. Ein Klick fliegt zum Gebiet der Fraktion.
 - **Hotkeys:** `1`–`7` wählen ein Gebäude (Reihenfolge der `buildingRegistry`), `8`/`9` Bomber und Rakete;
   `ESC` oder Rechtsklick verlässt den Modus.
 - **Bau-Ghost:** folgt dem Mauszeiger, zeigt Icon, Radien (Verteidigung, Abfangen, Reichweite der dort
   stationierten Einheiten, Wirkungsradius) und bei Fabriken die Linie zur angeschlossenen Stadt; grün, wenn
-  `canBuild()` zustimmt, sonst rot mit Grund am Cursor.
+  `canBuild()` zustimmt, sonst rot mit Grund am Cursor. Bei der Stadt (`1`) pulsieren Marker an allen noch freien
+  echten Städten, und der Hinweis nennt den Standort-Bonus („Standort-Bonus: Izmir (+30 % Wachstum, +15 % Gold)“).
 - **Start-Bildschirm:** drei Schritte über der gedimmten, langsam driftenden Karte – Nations-Kachel mit
   „Nation anpassen“ (Editor als Dialog), Karten-Kacheln in den Tabs „Welt & Kontinente“, „Regionen & Länder“,
   „Eigene Karten“ samt vier Schwierigkeits-Knöpfen (bewusst ohne Erklärtext), darunter „Einzelspieler starten“,
@@ -254,11 +288,11 @@ Die Lobby zeigt jeden Spieler mit Flagge, Herrscher- und Nationsnamen.
 
 | Pfad | Inhalt |
 | --- | --- |
-| `src/core/` | Simulation: `game.ts` (Grid, Ticks, Fluten, Landungen, Hash), `commands.ts`, `diplomacy.ts`, `buildings.ts`, `units.ts`, `nation.ts` (Profil, Doktrinen), `registry.ts`, `ai.ts`, `faction.ts`, `terrain.ts`, `rng.ts`, `setup.ts`, `testkit.ts` (Test-Helfer) |
-| `src/core/maps/` | `MapPackDefinition`, `MapRegistry`, Presets, Projektion, Rasterizer, `synth.ts` (Wald/Schiene), `custom.ts` (Karte aus Bounding-Box) |
+| `src/core/` | Simulation: `game.ts` (Grid, Ticks, Fluten, Landungen, Hash), `commands.ts`, `diplomacy.ts`, `buildings.ts`, `units.ts`, `nation.ts` (Profil, Doktrinen), `registry.ts`, `ai.ts`, `faction.ts`, `nation-presets.ts` (Staaten und Reiche), `terrain.ts`, `rng.ts`, `setup.ts`, `testkit.ts` (Test-Helfer) |
+| `src/core/maps/` | `MapPackDefinition`, `MapRegistry`, Presets, Projektion, Rasterizer, `synth.ts` (Wald/Schiene), `cities.ts` (Weltstädte), `custom.ts` (Karte aus Bounding-Box) |
 | `src/net/` | `lockstep.ts` (Host-Tick), `transport.ts` (trystero / BroadcastChannel), `lobby.ts` (Raum, Host, Namen) |
-| `src/osm/` | Terrain-Ableitung aus OSM-Kacheln und aus PNG-Masken |
-| `src/render/` | Territory-Canvas, Labels, `flag.ts` (Flaggen), `overlay.ts` (Gebäude-Icons, Einheiten, Flugbahnen, Effekte, Fronten, Gefahrenzonen, Bau-Ghost) |
+| `src/osm/` | Terrain-Ableitung aus OSM-Kacheln und aus PNG-Masken; `countries.ts` (Ländermaske, Grenzlinien) |
+| `src/render/` | Territory-Canvas, Labels, `flag.ts` (Flaggen), `flag-library.ts` (Bilder der Flaggen-Bibliothek), `overlay.ts` (Gebäude-Icons, Einheiten, Flugbahnen, Effekte, Fronten, Gefahrenzonen, Bau-Ghost) |
 | `src/ui/` | `nation-editor.ts`, `radial.ts` (Kontextmenü), `cursors.ts`, `sound.ts` (Web-Audio-Effekte), `tutorial.ts` (Zustandsautomat des Tutorials), `custom-maps.ts` (Bounding-Box-Formular, JSON-Import/-Export) |
 | `src/main.ts` | Karte, Start-Bildschirm, Lobby, HUD, Maus- und Tastensteuerung, Radialmenü, Tutorial-Führung, Alarme, Angebote, Spielschleife |
 | `.claude/commands/` | Projekt-Skills: `/verify` (Tests, Build, Browser, Doku, Commit) und `/add-content` (neue Gebäude/Einheiten/Karten) |
@@ -266,11 +300,11 @@ Die Lobby zeigt jeden Spieler mit Flagge, Herrscher- und Nationsnamen.
 Im Browser liegt unter `window.osmFront` ein Handle (`map`, `mapRegistry`, `session()`, `lobby()`) für Konsole und
 Browser-Tests. `session()` liefert u. a. `game`, `proj`, `pack`, `lockstep` und `me` (die eigene Fraktion);
 `mode()` und `ghost()` zeigen Bau-/Zielmodus und Vorschau, `sounds` listet die zuletzt ausgelösten Effekte,
-`tutorial()` den Schritt des laufenden Tutorials.
+`tutorial()` den Schritt des laufenden Tutorials, `cityMarks()` die Stadt-Marker im Bau-Ghost.
 
 ## Vorgehensweise
 
-Iterativ in 6 Phasen – **nicht** alles auf einmal ohne Test bauen. Jede Phase wird mit `vitest` und per
+Iterativ in 7 Phasen – **nicht** alles auf einmal ohne Test bauen. Jede Phase wird mit `vitest` und per
 Playwright MCP im echten Browser geprüft, bevor die nächste beginnt.
 
 ### Phase 1 – Fundament (abgeschlossen)
@@ -409,3 +443,31 @@ Bekannte Grenzen nach Phase 6:
   Im Duell überrennt auch „Schwer“ einen Spieler, der nur expandiert; Verträge sind auf engem Raum der Schlüssel.
 - Die Karten-Kacheln zeigen die Lage des Ausschnitts auf einem Gradnetz, kein Vorschaubild der Karte.
 - Rechtsklick-Menü und Mausrad-Regler haben auf Touch-Geräten keine Entsprechung.
+
+### Phase 7 – Ländergrenzen, Front-Glättung, Flaggen, Weltstädte, Spieltempo & Kamera (abgeschlossen)
+
+- [x] **Front-Glättung:** Tug-of-War zwischen Angriff und Gegenangriff, Kohäsions-Regel, Enklaven-Bereinigung
+      (Abschnitt 6) – kein Schachbrett-Muster mehr an umkämpften Grenzen.
+- [x] **Echte Ländergrenzen:** Natural-Earth-Maske für acht Länder-/Regionskarten (`OUT_OF_BOUNDS`, dunkel
+      ausgegraut), leuchtende Außengrenze und feine Ländergrenzen im Menü-Vorschau-Zoom und gedämpft im Spiel.
+- [x] **Kamera & Rangliste:** `WASD`/Pfeiltasten, kein Doppelklick-Zoom; Rangliste oben rechts mit Flagge,
+      Landanteil-Balken, Truppen und Gold, einklappbar, Klick fliegt zur Fraktion. `A`/`D` stellen nicht mehr den
+      Truppenanteil (nur noch `Q`/`E`).
+- [x] **Spieltempo:** Pause, 0.5x, 1x, 2x, 4x mit Leertaste und `+`/`-`; im Mehrspieler nur durch den Host.
+- [x] **Weltstädte:** 837 echte Städte; eine `City` darauf heißt wie die Stadt und bekommt den Bonus ihrer Stufe.
+- [x] **Flaggen-Bibliothek:** 101 heutige Staaten, 14 historische Reiche im Editor; KI-Nationen mit echter Flagge.
+- [x] Geprüft mit 115 Vitest-Tests (Tug-of-War, Kohäsion, Enklaven, Brücken und Brückenköpfe, gesperrtes Umland,
+      Stadt-Stufen 1–3, Vorlagen und Flaggen der KI, Tempo 0x bis 4x) und im Browser: WASD und Pfeiltasten,
+      Doppelklick ohne Zoom; USA-Karte mit gesperrtem Kanada und Mexiko, Balkan ohne Italien, Österreich und Ukraine,
+      Konturen im Menü; Klick auf „Rumänien“ in der Rangliste fliegt hin; Österreich-Ungarn und Römisches Reich im
+      Editor; Stadt auf Izmir mit Bonus-Hinweis, Name auf der Karte und +45 % Wachstum; zwei Tabs: nur der Host
+      pausiert, gegenseitige Angriffe ohne Schachbrett-Zellen, gleicher Zustands-Hash.
+
+Bekannte Grenzen nach Phase 7:
+
+- Die Natural-Earth-Grenzen (1:50m) sind gröber als die OSM-Küsten; an Grenzflüssen und Küsten kann ein Streifen von
+  ein bis zwei Zellen der falschen Seite zufallen.
+- Karten mit Ländermaske laden zusätzlich die Grenzdaten (rund 750 kB, einmal pro Besuch).
+- Historische Flaggen sind vereinfachte, eigene Zeichnungen; für Karthago ist keine Flagge überliefert, gezeigt
+  wird das Tanit-Zeichen.
+- Eine Stadt erbt den Bonus nur beim Bau; wer eine bestehende Stadt erobert, übernimmt ihn mit dem Gebäude.
