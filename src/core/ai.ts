@@ -120,10 +120,10 @@ function develop(g: Game, f: Faction): void {
     const result = site(g, f, id);
     if (result === 'ok' || result === 'gold') return; // built it, or saving up for it
   }
-  // Nothing left to build for now: the cheapest upgrade, once the treasury has twice its price.
+  // Nothing left to build for now: the cheapest upgrade, once the treasury holds three times its price.
   let best: (typeof g.buildings)[number] | undefined;
   for (const b of g.buildings) if (b.owner === f.id && b.level < MAX_LEVEL && (!best || upgradeCost(b) < upgradeCost(best))) best = b;
-  if (best && f.gold >= upgradeCost(best) * 2) upgrade(g, f.id, best.cell);
+  if (best && f.gold >= upgradeCost(best) * 3) upgrade(g, f.id, best.cell);
 }
 
 /** Builds on a random own cell; coastal buildings walk from there to the shore first. */

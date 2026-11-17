@@ -220,3 +220,31 @@ describe('air force and missiles', () => {
     expect(g.cost(centre, NEUTRAL)).toBe(clean);
   });
 });
+
+describe('beachheads', () => {
+  it('lets a fresh landing dig in: retaking it costs far more for thirty seconds', () => {
+    const { g, a, b } = strait();
+    a.troops = 50_000;
+    b.troops = 60_000; // strong enough to stand
+    const shore = at(g, 50, 15);
+    expect(g.land(a.id, shore, 5000)).toBe(true);
+    expect(g.owner[shore]).toBe(a.id);
+    const near = at(g, 51, 15);
+    run(g, 3);
+    const fresh = g.cost(shore, a.id);
+    expect(g.beachheadAt(near, a.id)).toBe(true);
+    run(g, 300);
+    expect(g.beachheadAt(near, a.id)).toBe(false);
+    expect(fresh).toBeGreaterThan(g.cost(shore, a.id) * 1.5);
+    expect(b.alive).toBe(true);
+  });
+
+  it('calls a landing off when a treaty partner has taken the shore meanwhile, and the troops come home', () => {
+    const { g, a, b } = strait();
+    expect(g.diplo.propose(g, a.id, b.id, 'NonAggressionPact') || g.diplo.accept(g, b.id, a.id, 'NonAggressionPact')).toBe(true);
+    const troops = a.troops;
+    expect(g.land(a.id, at(g, 52, 15), 1000)).toBe(false);
+    expect(a.troops).toBe(troops + 1000);
+    expect(g.diplo.status(g, a.id, b.id)).toBe('NonAggressionPact');
+  });
+});

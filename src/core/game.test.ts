@@ -23,6 +23,7 @@ describe('cell flooding', () => {
   it('floods free land but never water or the land behind it', () => {
     const g = world(40, 40, (x) => (x === 20 ? WATER : PLAINS));
     const me = human(g, 8, 20);
+    me.troops = 10_000; // settling free land costs troops: enough to fill the whole west
     const before = me.cells;
     expect(g.attack(me.id, NEUTRAL, 100)).toBe(true);
     run(g, 300);
@@ -155,8 +156,10 @@ describe('difficulty', () => {
     const [easy, normal, hard] = [grown('easy'), grown('normal'), grown('hard')];
     expect(easy[0]).toBe(normal[0]);
     expect(hard[0]).toBe(normal[0]);
-    expect(easy[1] / normal[1]).toBeCloseTo(0.7, 1);
-    expect(hard[1] / normal[1]).toBeCloseTo(1.25, 1);
+    // Measured against the player, whose growth is the same on every level: 60, 85 and 110 percent of it.
+    expect(easy[1] / easy[0]).toBeCloseTo(0.6, 1);
+    expect(normal[1] / normal[0]).toBeCloseTo(0.85, 1);
+    expect(hard[1] / hard[0]).toBeCloseTo(1.1, 1);
   });
 
   it('gives players a head start before the AI may pick on them', () => {

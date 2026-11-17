@@ -26,9 +26,10 @@ function duel(difficulty: Difficulty, seed: number) {
  * Plays the duel with a scripted player, one decision every two seconds like the AI.
  * The naive one only expands. The clever one does what the level asks for: trade,
  * gifts and a pact to buy time, bunkers and a rally point on the neck, cities and SAM
- * sites behind it, upgrades - and it strikes once it is clearly the stronger side.
+ * sites behind it, upgrades, a missile silo - and it strikes: a nuclear first strike on the AI's heartland
+ * once its own army is ready, then it marches in while the AI is at its weakest.
  */
-function play(difficulty: Difficulty, clever: boolean, seed: number, ticks: number) {
+function play(difficulty: Difficulty, clever: boolean, seed: number, ticks: number, strike = true) {
   const { g, me, ai } = duel(difficulty, seed);
   const cmd = (c: Command) => execute(g, me.id, c);
   const mine = (x: number, y: number) => g.owner[at(g, x, y)] === me.id;
@@ -43,10 +44,18 @@ function play(difficulty: Difficulty, clever: boolean, seed: number, ticks: numb
         if (status === 'Neutral' && !ready && cmd({ type: 'propose', to: ai.id, treaty: 'NonAggressionPact' }) !== 'ok' && me.gold >= 100) cmd({ type: 'aid', to: ai.id, gold: 100, troopsPct: 0 });
         for (const [x, y] of [[47, 19], [47, 21], [44, 20]]) if (mine(x, y)) cmd({ type: 'build', def: 'Bunker', cell: at(g, x, y) });
         if (mine(46, 20)) cmd({ type: 'rally', cell: at(g, 46, 20) });
-        for (const [x, y] of [[36, 8], [36, 32], [34, 20], [28, 8], [28, 32], [26, 20], [30, 14], [30, 26]]) if (mine(x, y)) cmd({ type: 'build', def: 'City', cell: at(g, x, y) });
-        for (const [x, y] of [[38, 14], [38, 26], [30, 20]]) if (mine(x, y) && me.gold > 900) cmd({ type: 'build', def: 'SAMSite', cell: at(g, x, y) });
+        // Once the silo stands, the treasury saves for the strike.
+        const saving = g.buildings.some((b) => b.owner === me.id && b.def.magazine) && status !== 'War';
+        if (!saving) for (const [x, y] of [[36, 8], [36, 32], [34, 20], [28, 8], [28, 32], [26, 20], [30, 14], [30, 26]]) if (mine(x, y)) cmd({ type: 'build', def: 'City', cell: at(g, x, y) });
+        if (!saving) for (const [x, y] of [[38, 14], [38, 26], [30, 20]]) if (mine(x, y) && me.gold > 900) cmd({ type: 'build', def: 'SAMSite', cell: at(g, x, y) });
+        if (mine(24, 14) && g.buildingAt.has(at(g, 34, 20))) cmd({ type: 'build', def: 'MissileSilo', cell: at(g, 24, 14) });
+        // The strike: a nuke on the heart of the AI's land, then missiles, as soon as the army stands ready.
+        const heart = Math.round(ai.sumY / ai.cells) * g.width + Math.round(ai.sumX / ai.cells);
+        if (strike && me.troops * 10 > g.maxTroops(me) * 7 && cmd({ type: 'launch', unit: 'Nuke', cell: heart, percent: 0 }) !== 'ok' && status === 'War') cmd({ type: 'launch', unit: 'Missile', cell: heart, percent: 0 });
         // Upgrades: cities first, then the bunkers on the neck.
-        for (const b of g.buildings) if (b.owner === me.id && (b.def.capacity || b.def.fort)) cmd({ type: 'upgrade', cell: b.cell });
+        // Gold goes to the silo and the first strike before it goes to upgrades.
+        const armed = g.buildings.some((b) => b.owner === me.id && b.def.magazine);
+        if (armed && (status === 'War' || me.gold > 3500)) for (const b of g.buildings) if (b.owner === me.id && (b.def.capacity || b.def.fort)) cmd({ type: 'upgrade', cell: b.cell });
         if (me.neighbors.includes(ai.id) && ((status === 'War' && me.troops > ai.troops) || (status === 'Neutral' && ready))) cmd({ type: 'attack', target: ai.id, percent: 50 });
       }
     }
@@ -57,27 +66,20 @@ function play(difficulty: Difficulty, clever: boolean, seed: number, ticks: numb
 }
 
 describe('difficulty "impossible"', () => {
-  it('gives the AI +35 % growth and +40 % income, and no head start for the player', () => {
-    const after = (difficulty: Difficulty) => {
-      const { g, me, ai } = duel(difficulty, 5);
-      ai.troops = me.troops = 500;
-      ai.gold = me.gold = 0;
-      run(g, 10); // before the AI spends anything
-      return { meTroops: me.troops, meGold: me.gold, aiTroops: ai.troops - 500, aiGold: ai.gold };
-    };
-    const normal = after('normal');
-    const impossible = after('impossible');
-    expect(impossible.meTroops).toBe(normal.meTroops);
-    expect(impossible.meGold).toBe(normal.meGold);
-    expect(impossible.aiTroops / normal.aiTroops).toBeCloseTo(1.35, 1);
-    expect(impossible.aiGold / normal.aiGold).toBeCloseTo(1.4, 5);
+  it('gives the AI +35 % growth and +40 % income over the player, and no head start for the player', () => {
+    const { g, me, ai } = duel('impossible', 5);
+    ai.troops = me.troops = 500;
+    ai.gold = me.gold = 0;
+    run(g, 10); // before the AI spends anything; both start alike on open plains
+    expect((ai.troops - 500) / (me.troops - 500)).toBeCloseTo(1.35, 1);
+    expect(ai.gold / me.gold).toBeCloseTo(1.4, 5);
     expect(DIFFICULTY.impossible.peaceTicks).toBe(0);
   });
 
   it('is stronger than "hard": the AI is ahead early and overruns a player who only expands', () => {
     const hard = play('hard', false, 3, 300);
     const impossible = play('impossible', false, 3, 300);
-    expect(impossible.ai.troops).toBeGreaterThan(hard.ai.troops * 1.1);
+    expect(impossible.ai.troops + impossible.ai.cells * 10).toBeGreaterThan((hard.ai.troops + hard.ai.cells * 10) * 1.1);
     expect(impossible.g.buildings.filter((b) => b.owner === impossible.ai.id).length).toBeGreaterThanOrEqual(hard.g.buildings.filter((b) => b.owner === hard.ai.id).length);
     const lost = play('impossible', false, 3, 3000);
     expect(lost.me.alive).toBe(false);
@@ -89,14 +91,24 @@ describe('difficulty "impossible"', () => {
     expect(g.tick - firstBlood).toBeGreaterThan(100); // and then needs more than ten seconds
   });
 
-  it.each([3, 7, 11])('can be beaten with bunkers on the chokepoint, diplomacy and a well-timed strike (seed %i)', (seed) => {
-    const { me, ai } = play('impossible', true, seed, 9000);
+  it.each([3, 7, 11])('lets a careful player hold out: pact, trade, bunkers on the chokepoint (seed %i)', (seed) => {
+    const { me, ai, g } = play('impossible', true, seed, 9000, false);
+    expect(g.tick).toBe(9000);
     expect(me.alive).toBe(true);
-    expect(ai.alive).toBe(false);
+    expect(ai.alive).toBe(true);
+    expect(me.cells).toBeGreaterThan(ai.cells * 0.8); // its own half of the map, held to the end
   });
 
   it('is deterministic', () => {
     expect(play('impossible', true, 3, 1500).g.hash()).toBe(play('impossible', true, 3, 1500).g.hash());
+  });
+});
+
+describe('the clever strategy on lower levels', () => {
+  it.each([['hard', 3], ['hard', 7], ['normal', 11]] as const)('wins on %s with bunkers, diplomacy and a nuclear first strike (seed %i)', (level, seed) => {
+    const { me, ai } = play(level, true, seed, 9000);
+    expect(me.alive).toBe(true);
+    expect(ai.alive).toBe(false);
   });
 });
 

@@ -18,6 +18,15 @@ export const NEUTRAL = 0;
 const RING = 32;
 const MAX_TERRAIN_DELAY = 12;
 const FALLOUT_DELAY = 6;
+/** A fresh beachhead (a landing from the sea or the air) holds out this long, ... */
+export const BEACHHEAD_TICKS = 300;
+/** ... within this radius ... */
+export const BEACHHEAD_RADIUS = 6;
+/** ... with this much extra defence, and this much slower to retake. */
+const BEACHHEAD_DEFENSE_PCT = 200;
+const BEACHHEAD_SLOW = 4;
+/** Troops it takes to settle a cell of free land, on top of its terrain cost. */
+const SETTLE_COST = 10;
 /** Around its rally point (within this many cells) a faction's land costs attackers this much more. */
 export const RALLY_RADIUS = 8;
 const RALLY_DEFENSE_PCT = 50;
@@ -83,9 +92,9 @@ export interface Level {
 }
 
 export const DIFFICULTY: Record<Difficulty, Level> = {
-  easy: { aiGrowthPct: 70, aiIncomePct: 100, peaceTicks: 1200, aggressionPct: 60, armsPct: 100, coalition: false },
-  normal: { aiGrowthPct: 100, aiIncomePct: 100, peaceTicks: 450, aggressionPct: 100, armsPct: 100, coalition: false },
-  hard: { aiGrowthPct: 125, aiIncomePct: 100, peaceTicks: 0, aggressionPct: 120, armsPct: 100, coalition: false },
+  easy: { aiGrowthPct: 60, aiIncomePct: 100, peaceTicks: 1200, aggressionPct: 60, armsPct: 100, coalition: false },
+  normal: { aiGrowthPct: 85, aiIncomePct: 100, peaceTicks: 450, aggressionPct: 100, armsPct: 100, coalition: false },
+  hard: { aiGrowthPct: 110, aiIncomePct: 100, peaceTicks: 0, aggressionPct: 120, armsPct: 100, coalition: false },
   impossible: { aiGrowthPct: 135, aiIncomePct: 140, peaceTicks: 0, aggressionPct: 150, armsPct: 60, coalition: true },
 };
 
@@ -137,6 +146,8 @@ export class Game {
   /** Bounding box of the cells that changed since `takeChanges` was last called. */
   private changed = [Infinity, Infinity, -1, -1];
   readonly cities: RealCity[];
+  /** Landings of the last BEACHHEAD_TICKS: the troops dig in around them. */
+  beachheads: { owner: number; cell: number; until: number }[] = [];
   private readonly cityAt = new Map<number, RealCity>();
   /** Cells that changed hands by conquest in this tick, for the smoothing pass. */
   private flipped: number[] = [];
@@ -296,10 +307,17 @@ export class Game {
       att.troops += troops; // the shore is ours by now: reinforcements
       return true;
     }
+    // The shore was free when the ships set out; if a treaty partner has taken it since, nobody lands.
+    const treaty = target === NEUTRAL ? 'War' : this.diplo.status(this, attackerId, target);
+    if (treaty === 'NonAggressionPact' || treaty === 'Alliance') {
+      att.troops += troops;
+      return false;
+    }
     const cost = this.cost(cell, target);
     if (troops < cost) return false;
     this.diplo.hostile(this, attackerId, target);
     this.take(cell, attackerId, target);
+    this.beachheads.push({ owner: attackerId, cell, until: this.tick + BEACHHEAD_TICKS });
     let atk = this.attacks.find((a) => a.attacker === attackerId && a.target === target);
     if (!atk) {
       atk = { attacker: attackerId, target, troops: 0, buckets: Array.from({ length: RING }, () => []), pending: 0, held: false, idle: 0 };
@@ -354,6 +372,7 @@ export class Game {
     if (second) this.refreshNeighbors();
     if (second || this.dirty) refreshEconomy(this);
     if (this.tick % (10 * TICKS_PER_SECOND) === 0) this.diplo.drift(this);
+    if (this.beachheads.length > 0 && this.beachheads[0].until <= this.tick) this.beachheads = this.beachheads.filter((b) => b.until > this.tick);
     if (this.events.length > 0 && this.events[0].tick + EVENT_TICKS < this.tick) this.events = this.events.filter((e) => e.tick + EVENT_TICKS >= this.tick);
 
     for (let i = 1; i < this.factions.length; i++) {
@@ -509,23 +528,39 @@ export class Game {
    */
   private enqueue(atk: Attack, cell: number): void {
     let d = this.delay[this.terrain[cell]] + Math.floor(this.rng() * 2);
-    if (atk.target === NEUTRAL) d = (d + 1) >> 1;
-    else {
+    if (atk.target !== NEUTRAL) {
       const def = this.factions[atk.target];
       const att = this.factions[atk.attacker];
       const attDensity = (att.troops + atk.troops) / att.cells;
       d += attDensity > 0 ? Math.min(8, Math.floor((2 * def.troops) / def.cells / attDensity)) : 8;
       if (this.fortOwner[cell] === atk.target) d += this.fortSlow[cell];
+      else if (this.beachheadAt(cell, atk.target)) d += BEACHHEAD_SLOW;
     }
     if (this.fallout[cell] > this.tick) d += FALLOUT_DELAY;
     atk.buckets[(this.tick + d) % RING].push(cell);
     atk.pending++;
   }
 
+  /** Is `cell` within a fresh beachhead of `owner`? */
+  beachheadAt(cell: number, owner: number): boolean {
+    if (this.beachheads.length === 0) return false;
+    const w = this.width;
+    const x = cell % w;
+    const y = (cell - x) / w;
+    for (const b of this.beachheads) {
+      if (b.owner !== owner || b.until <= this.tick) continue;
+      const dx = (b.cell % w) - x;
+      const dy = Math.floor(b.cell / w) - y;
+      if (dx * dx + dy * dy <= BEACHHEAD_RADIUS * BEACHHEAD_RADIUS) return true;
+    }
+    return false;
+  }
+
   /** Troops the attacker pays for one cell: terrain plus the defenders standing on it. */
   cost(cell: number, target: number): number {
     const t = this.terrain[cell];
-    let cost = this.delay[t] * 2;
+    // Free land is not free: settling it takes troops, so expansion is a choice and not a formality.
+    let cost = this.delay[t] * 2 + (target === NEUTRAL ? SETTLE_COST : 0);
     if (this.fallout[cell] > this.tick) cost *= 3;
     if (target !== NEUTRAL) {
       const def = this.factions[target];
@@ -536,6 +571,7 @@ export class Game {
         const dy = Math.floor(cell / this.width) - Math.floor(def.rally / this.width);
         if (dx * dx + dy * dy <= RALLY_RADIUS * RALLY_RADIUS) pct += RALLY_DEFENSE_PCT;
       }
+      if (this.beachheadAt(cell, target)) pct += BEACHHEAD_DEFENSE_PCT;
       if (def.traitorUntil > this.tick) pct = (pct * TRAITOR_DEFENSE_PCT) / 100;
       if (def.protected) pct = (pct * PROTECTED_DEFENSE_PCT) / 100;
       cost += Math.ceil(((def.troops / def.cells) * pct) / 100);

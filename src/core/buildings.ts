@@ -98,7 +98,7 @@ export const CITY_TIERS: Record<1 | 2 | 3, { label: string; growthPct: number; i
   3: { label: 'Regionalstadt', growthPct: 15, incomePct: 0 },
 };
 /** Buildings add up to at most this much extra growth. */
-const MAX_GROWTH_PCT = 150;
+const MAX_GROWTH_PCT = 75;
 // --- levels and supply -----------------------------------------------------
 
 /** How much a level and a supplying factory scale a building's effect: level 1 is 1, every level adds half. */
