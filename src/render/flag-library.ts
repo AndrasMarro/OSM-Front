@@ -1,7 +1,12 @@
 /**
  * The flag library: pictures for the ids in `src/core/nation-presets.ts`.
- * Today's states come from the `flag-icons` package (MIT), historic empires are drawn here as small SVGs.
+ * Today's states come from the `flag-icons` package (MIT); historic empires from Wikimedia Commons
+ * (`src/assets/flags/`, public domain or CC BY-SA, see the file pages there). Where Commons has no
+ * flag (Carthage) - or a file is missing - a small drawing of our own stands in.
  */
+const wikimedia = import.meta.glob<string>('/src/assets/flags/*.svg', { query: '?url', import: 'default', eager: true });
+/** The Vergina sun is an emblem, not a flag: it goes on royal blue. */
+const verginaSun = Object.values(import.meta.glob<string>('/src/assets/flags/h-macedon.svg', { query: '?raw', import: 'default', eager: true }))[0];
 // Only the flags the presets use are bundled.
 // prettier-ignore
 const modern = import.meta.glob<string>(
@@ -82,5 +87,11 @@ const historic: Record<string, string> = {
   'h-kalmar': svg(`<rect width="60" height="40" fill="#f2b600"/><rect x="17" width="7" height="40" fill="#c8102e"/><rect y="16.5" width="60" height="7" fill="#c8102e"/>`),
 };
 
+if (verginaSun?.includes('<svg')) {
+  const inner = verginaSun.replace(/<\?xml[^>]*>/, '').replace(/<svg\b/, '<svg x="12" y="2" width="36" height="36"');
+  historic['h-macedon'] = svg(`<rect width="60" height="40" fill="#1f3f8f"/>${inner}`);
+}
+
 /** Where the picture of a library flag is, or undefined for an id the library does not have. */
-export const flagUrl = (id: string): string | undefined => historic[id] ?? modern[`/node_modules/flag-icons/flags/4x3/${id}.svg`];
+export const flagUrl = (id: string): string | undefined =>
+  (id === 'h-macedon' ? undefined : wikimedia[`/src/assets/flags/${id}.svg`]) ?? historic[id] ?? modern[`/node_modules/flag-icons/flags/4x3/${id}.svg`];

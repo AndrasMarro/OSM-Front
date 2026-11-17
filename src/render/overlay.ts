@@ -2,7 +2,8 @@ import type { Map as MapLibreMap } from 'maplibre-gl';
 import { CITY_TIERS, MAX_LEVEL, supplyRadius } from '../core/buildings';
 import { NEUTRAL, RALLY_RADIUS, type Attack, type Game, type GameEvent } from '../core/game';
 import type { GridProjection } from '../core/maps/projection';
-import type { Unit } from '../core/units';
+import { etaTicks, type Unit } from '../core/units';
+import { buildingImage, unitImage } from './icons';
 import { formatTroops } from './labels';
 import { factionColor } from './territory';
 
@@ -58,30 +59,79 @@ const DOT_BELOW_CELL_PX = 1.6;
 const SPRITE_SCALE = 2;
 const badges = new Map<string, HTMLCanvasElement>();
 
-function badge(icon: string, color: string, size: number): HTMLCanvasElement {
-  const key = `${icon}|${color}|${size}`;
+/** Ring colours by level: the owner's colour, then bronze, silver, gold. */
+const LEVEL_RING = ['', '', '#c98a4b', '#d9dee6', '#ffd45e'];
+const ROMAN = ['', 'I', 'II', 'III', 'IV'];
+const hexOf = (rgbText: string) => `#${rgbText.split(' ').map((v) => Number(v).toString(16).padStart(2, '0')).join('')}`;
+
+/**
+ * A building's badge: its art on a dark plate inside a ring. The ring shows the level - the owner's
+ * colour at level 1, bronze, silver and gold above, doubled and glowing at the top - and from level 2
+ * a small shield carries the level in Roman numerals.
+ */
+function badge(id: string, icon: string, color: string, size: number, level: number): HTMLCanvasElement {
+  const key = `${id}|${color}|${size}|${level}`;
   let sprite = badges.get(key);
-  if (!sprite) {
-    const r = size * 0.68;
-    const side = Math.ceil((r + 2) * 2 * SPRITE_SCALE);
-    sprite = Object.assign(document.createElement('canvas'), { width: side, height: side });
-    const c = sprite.getContext('2d')!;
-    c.scale(SPRITE_SCALE, SPRITE_SCALE);
-    const mid = side / (2 * SPRITE_SCALE);
+  if (sprite) return sprite;
+  const art = buildingImage(id, hexOf(color));
+  const r = size * 0.72;
+  const pad = level >= MAX_LEVEL ? 6 : 3;
+  const side = Math.ceil((r + pad) * 2 * SPRITE_SCALE);
+  sprite = Object.assign(document.createElement('canvas'), { width: side, height: side });
+  const c = sprite.getContext('2d')!;
+  c.scale(SPRITE_SCALE, SPRITE_SCALE);
+  const mid = side / (2 * SPRITE_SCALE);
+  c.beginPath();
+  c.arc(mid, mid, r, 0, Math.PI * 2);
+  c.fillStyle = 'rgb(16 20 26 / 92%)';
+  if (level >= MAX_LEVEL) {
+    c.shadowColor = '#ffd45e';
+    c.shadowBlur = 6;
+  }
+  c.fill();
+  c.shadowBlur = 0;
+  c.lineWidth = level > 1 ? 2.5 : 2;
+  c.strokeStyle = level > 1 ? LEVEL_RING[level] : `rgb(${color})`;
+  c.stroke();
+  if (level >= MAX_LEVEL) {
     c.beginPath();
-    c.arc(mid, mid, r, 0, Math.PI * 2);
-    c.fillStyle = 'rgb(16 20 26 / 88%)';
-    c.fill();
-    c.lineWidth = 2;
-    c.strokeStyle = `rgb(${color})`;
+    c.arc(mid, mid, r + 2.5, 0, Math.PI * 2);
+    c.lineWidth = 1.2;
     c.stroke();
+  }
+  if (art) c.drawImage(art, mid - r * 0.72, mid - r * 0.72, r * 1.44, r * 1.44);
+  else {
     c.fillStyle = '#fff';
     c.font = `${size}px system-ui, sans-serif`;
     c.textAlign = 'center';
     c.textBaseline = 'middle';
     c.fillText(icon, mid, mid + 1);
-    badges.set(key, sprite);
   }
+  if (level > 1) {
+    // The level shield, bottom right.
+    const sx = mid + r * 0.62;
+    const sy = mid + r * 0.62;
+    const sw = 5 + 2.6 * ROMAN[level].length;
+    c.beginPath();
+    c.moveTo(sx - sw / 2, sy - 5);
+    c.lineTo(sx + sw / 2, sy - 5);
+    c.lineTo(sx + sw / 2, sy + 2);
+    c.lineTo(sx, sy + 5.5);
+    c.lineTo(sx - sw / 2, sy + 2);
+    c.closePath();
+    c.fillStyle = LEVEL_RING[level];
+    c.fill();
+    c.lineWidth = 1;
+    c.strokeStyle = 'rgb(0 0 0 / 70%)';
+    c.stroke();
+    c.fillStyle = '#11161d';
+    c.font = '700 6.5px system-ui, sans-serif';
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText(ROMAN[level], sx, sy - 0.8);
+  }
+  // Only a finished picture is kept; until the art has loaded, the badge is drawn afresh.
+  if (art) badges.set(key, sprite);
   return sprite;
 }
 
@@ -244,21 +294,9 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, gam
     for (const b of game.buildings) {
       const p = ofCell(b.cell);
       if (!visible(p)) continue;
-      const sprite = badge(b.def.icon, rgb(b.owner), size);
+      const sprite = badge(b.def.id, b.def.icon, rgb(b.owner), size, b.level);
       ctx.drawImage(sprite, p.x - sprite.width / (2 * SPRITE_SCALE), p.y - sprite.height / (2 * SPRITE_SCALE), sprite.width / SPRITE_SCALE, sprite.height / SPRITE_SCALE);
       const half = sprite.width / (2 * SPRITE_SCALE);
-      // Its level as pips under the badge, gold at the top level.
-      if (b.level > 1) {
-        for (let i = 0; i < b.level; i++) {
-          ctx.beginPath();
-          ctx.arc(p.x + (i - (b.level - 1) / 2) * 6, p.y + half + 2, 2.2, 0, Math.PI * 2);
-          ctx.fillStyle = b.level === MAX_LEVEL ? '#ffd45e' : '#fff';
-          ctx.fill();
-          ctx.lineWidth = 1;
-          ctx.strokeStyle = 'rgb(0 0 0 / 70%)';
-          ctx.stroke();
-        }
-      }
       // Still being set up (a SAM battery): an arc that closes as it gets ready.
       if (b.def.arming && b.armedAt > game.tick) {
         const left = (b.armedAt - game.tick) / b.def.arming;
@@ -338,7 +376,14 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, gam
       ctx.stroke();
     }
 
-    const shape = SHAPES[u.def.domain];
+    // Coming for the player: a red ring that pulses around it.
+    const incoming = me >= 0 && u.owner !== me && u.targetOwner === me;
+    if (incoming) {
+      ring(p, 17 + 3 * pulse);
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = `rgb(255 70 50 / ${0.55 + 0.45 * pulse})`;
+      ctx.stroke();
+    }
     ctx.save();
     ctx.translate(p.x, p.y);
     if (ahead.x !== p.x || ahead.y !== p.y) ctx.rotate(Math.atan2(ahead.y - p.y, ahead.x - p.x));
@@ -349,25 +394,25 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, map: MapLibreMap, gam
       ctx.shadowColor = u.level >= 4 ? '#ffd45e' : '#fff';
       ctx.shadowBlur = 4 + 3 * u.level;
     }
-    ctx.beginPath();
-    for (let i = 0; i < shape.length; i += 2) ctx.lineTo(shape[i], shape[i + 1]);
-    ctx.closePath();
-    ctx.fillStyle = `rgb(${color})`;
-    ctx.fill();
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = '#fff';
-    ctx.stroke();
+    const art = unitImage(u.def.id, hexOf(color));
+    if (art) ctx.drawImage(art, -22, -22, 44, 44);
+    else {
+      const shape = SHAPES[u.def.domain];
+      ctx.beginPath();
+      for (let i = 0; i < shape.length; i += 2) ctx.lineTo(shape[i], shape[i + 1]);
+      ctx.closePath();
+      ctx.fillStyle = `rgb(${color})`;
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#fff';
+      ctx.stroke();
+    }
     ctx.restore();
     // A veteran warship wears its rank: one chevron per level above the first.
     if (u.level > 1) caption('^'.repeat(u.level - 1), p.x, p.y - 12 - u.level * 2, u.level >= 4 ? '#ffd45e' : '#fff', 12);
-    if (u.troops > 0) {
-      ctx.font = '600 11px system-ui, sans-serif';
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = 'rgb(0 0 0 / 80%)';
-      ctx.strokeText(formatTroops(u.troops), p.x, p.y - 13);
-      ctx.fillStyle = '#fff';
-      ctx.fillText(formatTroops(u.troops), p.x, p.y - 13);
-    }
+    // Troops on board, and for anything coming at the player the time left.
+    const label = [u.troops > 0 ? `${formatTroops(u.troops)} Mann` : '', incoming ? `${Math.ceil(etaTicks(u) / 10)} s` : ''].filter(Boolean).join(' · ');
+    if (label) caption(label, p.x, p.y - 20, incoming ? '#ff8a7a' : '#fff', incoming ? 13 : 11);
   }
 
   // Effects: a ring that grows and fades; a cross where something was shot down or thrown back.

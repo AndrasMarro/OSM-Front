@@ -2,6 +2,8 @@
 export interface RadialItem {
   /** One character on the button, and the name and detail shown in the hub while it is pointed at. */
   icon: string;
+  /** A picture instead of the character, as an image URL. */
+  art?: string;
   label: string;
   hint?: () => string;
   enabled?: () => boolean;
@@ -91,7 +93,8 @@ export class Radial {
 
     this.live = spec.items.map((item, i) => {
       const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
-      const button = Object.assign(document.createElement('button'), { type: 'button', textContent: item.icon });
+      const button = Object.assign(document.createElement('button'), { type: 'button', textContent: item.art ? '' : item.icon });
+      if (item.art) button.append(Object.assign(new Image(), { src: item.art, alt: '' }));
       button.setAttribute('aria-label', item.label);
       button.style.left = `${Math.cos(angle) * radius}px`;
       button.style.top = `${Math.sin(angle) * radius}px`;

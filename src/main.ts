@@ -12,13 +12,14 @@ import { mapRegistry, validateMapPack } from './core/maps/registry';
 import type { MapPackDefinition } from './core/maps/types';
 import { createGame } from './core/setup';
 import { isLand, Terrain } from './core/terrain';
-import { unitCost, unitRegistry, type UnitDefinition } from './core/units';
+import { etaTicks, unitCost, unitRegistry, type UnitDefinition } from './core/units';
 import { Lobby } from './net/lobby';
 import { Lockstep, SPEEDS, type PlayerCommand } from './net/lockstep';
 import { localTransport, relayTransport, trysteroTransport, type Transport } from './net/transport';
 import { borderLines } from './osm/countries';
 import { loadTerrain } from './osm/terrain';
 import { factionFlag, flagElement, flagImage } from './render/flag';
+import { buildingIconUrl, unitIconUrl } from './render/icons';
 import { drawLabels, factionIcon, formatTroops } from './render/labels';
 import { drawOverlay, frontOf, type Ghost } from './render/overlay';
 import { factionColor, TerritoryPainter } from './render/territory';
@@ -276,7 +277,7 @@ function showMenu(): void {
   if (map.getLayer(LAYER)) map.removeLayer(LAYER);
   if (map.getSource(LAYER)) map.removeSource(LAYER);
   hud.hidden = true;
-  $('hover').textContent = ' ';
+  $('hover').textContent = '';
   $('offers').hidden = true;
   $('hotbar').hidden = $('troops').hidden = $('speed').hidden = $('ranking').hidden = $('game-menu').hidden = true;
   $<HTMLDetailsElement>('game-menu').open = false;
@@ -795,10 +796,11 @@ interface Slot {
 }
 const slots: Slot[] = [];
 {
-  const add = (key: number, slotMode: NonNullable<Mode>, icon: string, name: string) => {
+  const add = (key: number, slotMode: NonNullable<Mode>, icon: string, name: string, art: string) => {
     const button = Object.assign(document.createElement('button'), { type: 'button', title: name });
     const price = document.createElement('small');
-    button.append(Object.assign(document.createElement('kbd'), { textContent: `${key}` }), Object.assign(document.createElement('b'), { textContent: icon }), price);
+    const picture = art ? Object.assign(new Image(), { src: art, alt: '', className: 'art' }) : Object.assign(document.createElement('b'), { textContent: icon });
+    button.append(Object.assign(document.createElement('kbd'), { textContent: `${key}` }), picture, price);
     button.setAttribute('aria-label', `${name} (Taste ${key})`);
     const slot: Slot = { key: `${key}`, mode: slotMode, button, price };
     button.addEventListener('click', () => toggleSlot(slot));
@@ -808,9 +810,9 @@ const slots: Slot[] = [];
   const buildings = buildingRegistry.list().slice(0, 7);
   const units = TARGET_HOTKEYS.map((id) => unitRegistry.get(id)!);
   $('hotbar').append(
-    ...buildings.map((def, i) => add(i + 1, { kind: 'build', def }, def.icon, def.name)),
+    ...buildings.map((def, i) => add(i + 1, { kind: 'build', def }, def.icon, def.name, buildingIconUrl(def.id))),
     Object.assign(document.createElement('span'), { className: 'gap' }),
-    ...units.map((unit, i) => add(buildings.length + 1 + i, { kind: 'target', unit }, unit.icon, unit.name)),
+    ...units.map((unit, i) => add(buildings.length + 1 + i, { kind: 'target', unit }, unit.icon, unit.name, unitIconUrl(unit.id))),
   );
 }
 const sameMode = (a: Mode, b: Mode) => a !== null && b !== null && (a.kind === 'build' ? b.kind === 'build' && a.def === b.def : b.kind === 'target' && a.unit === b.unit);
@@ -1057,6 +1059,7 @@ function openMenu(cell: number, x: number, y: number): void {
 
   const unitItem = (unit: UnitDefinition): RadialItem => ({
     icon: unit.icon,
+    art: unitIconUrl(unit.id),
     label: unit.name,
     hint: () => [gold(unitCost(game, mine.id, unit)), unit.carriesTroops ? `${percent()} % Truppen` : '', launchProblem(game, mine, unit, cell)].filter(Boolean).join(' · '),
     enabled: () => !launchProblem(game, mine, unit, cell),
@@ -1085,6 +1088,7 @@ function openMenu(cell: number, x: number, y: number): void {
           const problem = () => canBuild(game, mine.id, def.id, cell);
           return {
             icon: def.icon,
+            art: buildingIconUrl(def.id),
             label: def.name,
             hint: () => [gold(price(game, mine.id, def)), problem() === 'ok' ? '' : BUILD_HINT[problem()]].filter(Boolean).join(' · '),
             enabled: () => problem() === 'ok',
@@ -1269,37 +1273,59 @@ const ARROWS = ['→', '↘', '↓', '↙', '←', '↖', '↑', '↗'];
 /** Alarms shown at once; more than that is noise. */
 const MAX_ALARMS = 4;
 
+/** A threat as the alarm shows it: what is coming, from whom, how many, and how long until it hits. */
+interface Threat {
+  key: string;
+  cell: number;
+  icon: string;
+  title: string;
+  from: string;
+  troops: number;
+  /** Seconds until it arrives, or -1 for a front that is already moving. */
+  eta: number;
+}
+
 function renderAlarms(game: Game, mine: Faction): void {
-  const threats: { key: string; text: string; cell: number }[] = [];
+  const threats: Threat[] = [];
   const name = (id: number) => game.factions[id].name.toUpperCase();
   // Nothing threatens the fallen.
   for (const atk of mine.alive ? game.attacks : []) {
     if (atk.target !== mine.id) continue;
     const { centre } = frontOf(game, atk);
-    if (centre >= 0) threats.push({ key: `attack${atk.attacker}`, cell: centre, text: `⚠ ANGRIFF von ${name(atk.attacker)} (${formatTroops(atk.troops)} Truppen)` });
+    if (centre >= 0) threats.push({ key: `attack${atk.attacker}`, cell: centre, icon: '', title: 'ANGRIFF', from: name(atk.attacker), troops: atk.troops, eta: -1 });
   }
   for (const u of mine.alive ? game.units : []) {
     if (u.targetOwner !== mine.id || u.owner === mine.id) continue;
-    const troops = `(${formatTroops(u.troops)} Truppen)`;
-    const text = u.def.blast
+    const title = u.def.blast
       ? u.def.domain === 'missile'
-        ? `${u.def.blast.neutralize ? '☢ ATOMALARM!' : '➤ RAKETENALARM!'} ${u.def.name} von ${name(u.owner)}`
-        : `✹ LUFTANGRIFF von ${name(u.owner)}`
+        ? u.def.blast.neutralize
+          ? 'ATOMALARM'
+          : 'RAKETE'
+        : 'LUFTANGRIFF'
       : u.def.carriesTroops
-        ? `${u.path ? '⚓ LANDUNG' : '☂ LUFTLANDUNG'} von ${name(u.owner)} ${troops}`
-        : `☸ KRIEGSSCHIFF von ${name(u.owner)}`;
-    threats.push({ key: `unit${u.id}`, cell: u.to, text });
+        ? u.path
+          ? 'LANDUNG'
+          : 'LUFTLANDUNG'
+        : 'KRIEGSSCHIFF';
+    threats.push({ key: `unit${u.id}`, cell: u.to, icon: unitIconUrl(u.def.id, '#ff8a7a'), title, from: name(u.owner), troops: u.troops, eta: Math.ceil(etaTicks(u) / TICKS_PER_SECOND) });
   }
+  // The most urgent first.
+  threats.sort((a, b) => (a.eta < 0 ? 0 : a.eta) - (b.eta < 0 ? 0 : b.eta));
   threats.length = Math.min(threats.length, MAX_ALARMS);
 
   const box = $('alarms');
   const { clientWidth, clientHeight } = map.getContainer();
   const seen = new Set<string>();
+  const set = (el: Element, text: string) => {
+    if (el.textContent !== text) el.textContent = text;
+  };
   for (const t of threats) {
     seen.add(t.key);
     let button = alarmButtons.get(t.key);
     if (!button) {
       button = Object.assign(document.createElement('button'), { type: 'button' });
+      const art = t.icon ? Object.assign(new Image(), { src: t.icon, alt: '' }) : Object.assign(document.createElement('span'), { className: 'art', textContent: '⚔' });
+      button.append(art, Object.assign(document.createElement('b'), { className: 'eta' }), Object.assign(document.createElement('span'), { className: 'what' }), Object.assign(document.createElement('span'), { className: 'arrow' }));
       // The click jumps to wherever the threat is by then.
       button.addEventListener('click', (e) => {
         const cell = Number((e.currentTarget as HTMLElement).dataset.cell);
@@ -1312,9 +1338,11 @@ function renderAlarms(game: Game, mine: Faction): void {
     // Which way to look: an arrow towards the threat, or a mark if it is already in view.
     const p = map.project(session!.proj.lngLat((t.cell % game.width) + 0.5, Math.floor(t.cell / game.width) + 0.5));
     const inView = p.x >= 0 && p.y >= 0 && p.x <= clientWidth && p.y <= clientHeight;
-    const arrow = inView ? '◎' : ARROWS[(Math.round(Math.atan2(p.y - clientHeight / 2, p.x - clientWidth / 2) / (Math.PI / 4)) + 8) % 8];
-    const text = `${t.text} ${arrow}`;
-    if (button.textContent !== text) button.textContent = text;
+    const [, eta, what, arrow] = button.children;
+    set(eta, t.eta < 0 ? 'JETZT' : `${t.eta} s`);
+    set(what, `${t.title} von ${t.from}${t.troops > 0 ? ` · ${Math.round(t.troops).toLocaleString('de-DE')} Mann` : ''}`);
+    set(arrow, inView ? '◎' : ARROWS[(Math.round(Math.atan2(p.y - clientHeight / 2, p.x - clientWidth / 2) / (Math.PI / 4)) + 8) % 8]);
+    button.classList.toggle('soon', t.eta >= 0 && t.eta <= 10);
     button.dataset.cell = `${t.cell}`;
   }
   for (const [key, button] of alarmButtons) {
@@ -1326,26 +1354,59 @@ function renderAlarms(game: Game, mine: Faction): void {
 
 // --- HUD and game loop ---------------------------------------------------------
 
-/** Treaties other factions offer the player, each with a button to accept it. */
+/** What each treaty means for the player, said in one line on the offer card. */
+const TREATY_TEXT: Record<Treaty, string> = {
+  TradeAgreement: 'Handelsabkommen: Gold für beide Seiten, solange es gilt.',
+  NonAggressionPact: 'Nichtangriffspakt: zwei Minuten keine Angriffe aufeinander.',
+  Alliance: 'Bündnis: gemeinsame Feinde, gegenseitige Verteidigung.',
+};
+/** Offers the player has turned down; they simply run out on the other side. */
+const declined = new Set<string>();
+
+/** Treaties other factions offer the player: a card each, with the time left, to accept or decline. */
 function renderOffers(game: Game, mine: Faction): void {
-  const offers = game.diplo.offersTo(game, mine.id);
-  const signature = offers.map((o) => `${o.from}:${o.treaty}`).join();
-  if (!session || signature === session.offers) return;
-  if (signature.length > session.offers.length) play('offer');
-  session.offers = signature;
-  $('offers').hidden = offers.length === 0;
-  $('offers').replaceChildren(
-    ...offers.map((o) => {
-      const from = game.factions[o.from];
-      const button = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Annehmen' });
-      button.addEventListener('click', () =>
-        order({ type: 'accept', from: o.from, treaty: o.treaty }, (result) => (result === 'ok' ? `${TREATY_LABEL[o.treaty]} mit ${from.name} geschlossen.` : 'Dieses Angebot gilt nicht mehr.')),
-      );
-      const row = document.createElement('div');
-      row.append(factionFlag(from) ? flagElement(factionFlag(from)!) : factionIcon(from), ` ${from.name} bietet: ${TREATY_LABEL[o.treaty]}`, button);
-      return row;
-    }),
-  );
+  const offers = game.diplo.offersTo(game, mine.id).filter((o) => !declined.has(`${o.from}:${o.treaty}:${o.until}`));
+  const signature = offers.map((o) => `${o.from}:${o.treaty}:${o.until}`).join();
+  const box = $('offers');
+  if (session && signature !== session.offers) {
+    if (offers.length > session.offers.split(',').filter(Boolean).length) play('offer');
+    session.offers = signature;
+    box.hidden = offers.length === 0;
+    box.replaceChildren(
+      ...offers.map((o) => {
+        const from = game.factions[o.from];
+        const key = `${o.from}:${o.treaty}:${o.until}`;
+        const accept = Object.assign(document.createElement('button'), { type: 'button', className: 'yes', textContent: '✔ Annehmen' });
+        accept.addEventListener('click', () =>
+          order({ type: 'accept', from: o.from, treaty: o.treaty }, (result) => (result === 'ok' ? `${TREATY_LABEL[o.treaty]} mit ${from.name} geschlossen.` : 'Dieses Angebot gilt nicht mehr.')),
+        );
+        const decline = Object.assign(document.createElement('button'), { type: 'button', className: 'no', textContent: '✖ Ablehnen' });
+        decline.addEventListener('click', () => {
+          declined.add(key);
+          session!.offers = '';
+          renderOffers(game, mine);
+        });
+        const flag = factionFlag(from);
+        const card = Object.assign(document.createElement('article'), { className: 'offer' });
+        card.dataset.until = `${o.until}`;
+        card.append(
+          flag ? flagElement(flag) : Object.assign(document.createElement('span'), { className: 'flag icon', textContent: factionIcon(from) }),
+          Object.assign(document.createElement('strong'), { textContent: `${from.name} bietet dir ${o.treaty === 'NonAggressionPact' ? 'einen' : 'ein'} ${TREATY_LABEL[o.treaty]} an` }),
+          Object.assign(document.createElement('p'), { textContent: TREATY_TEXT[o.treaty] }),
+          Object.assign(document.createElement('small'), { className: 'left' }),
+          accept,
+          decline,
+        );
+        return card;
+      }),
+    );
+  }
+  // The time each offer has left.
+  for (const card of box.querySelectorAll<HTMLElement>('article')) {
+    const left = `noch ${Math.max(0, Math.ceil((Number(card.dataset.until) - game.tick) / TICKS_PER_SECOND))} s`;
+    const el = card.querySelector('.left')!;
+    if (el.textContent !== left) el.textContent = left;
+  }
 }
 
 function renderHud(): void {
